@@ -8,7 +8,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/crawler.test.js test/extract.test.js test/issues.test.js test/robots.test.js test/sitemap.test.js test/urlutil.test.js test/v2.test.js",
     "wordlist": "node scripts/make-wordlist.js",
     "test:app": "node scripts/run-smoke.js",
     "live": "node scripts/live-crawl.js",
@@ -17,7 +17,12 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win"
   },
-  "keywords": ["seo", "crawler", "site audit", "electron"],
+  "keywords": [
+    "seo",
+    "crawler",
+    "site audit",
+    "electron"
+  ],
   "dependencies": {
     "cheerio": "^1.0.0"
   },
@@ -30,17 +35,45 @@
     "productName": "Seonfix Spider",
     "artifactName": "Seonfix-Spider-${version}-${os}-${arch}.${ext}",
     "copyright": "Copyright (c) 2026 Seonfix",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "test/smoke-electron.js", "package.json"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "test/smoke-electron.js",
+      "package.json"
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "darkModeSupport": true,
       "hardenedRuntime": false,
       "identity": "-",
-      "target": [{ "target": "dmg", "arch": ["universal"] }]
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
     },
-    "dmg": { "title": "Seonfix Spider ${version}" },
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+    "dmg": {
+      "title": "Seonfix Spider ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
