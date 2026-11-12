@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'none'">
+<title>Seonfix Spider</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand"><img src="logo.png" alt="Seonfix Spider logo" width="28" height="28"><span>Seonfix <b>Spider</b></span></div>
+  <select id="mode-select" title="Crawl mode">
+    <option value="spider">Spider</option>
+    <option value="list">List</option>
+    <option value="sitemap">Sitemap</option>
+  </select>
+  <input id="url-input" type="text" placeholder="Enter URL to spider..." spellcheck="false">
+  <button id="btn-start" class="primary">Start</button>
+  <button id="btn-pause">Pause</button>
+  <button id="btn-resume">Resume</button>
+  <button id="btn-clear">Clear</button>
+  <button id="btn-config">Configuration</button>
+  <button id="btn-settings">Settings</button>
+</header>
+<div id="progress-row">
+  <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+  <div id="progress-text">Ready. Enter a URL and press Start.</div>
+</div>
+<nav id="tabs"></nav>
+<div id="main-split">
+  <section id="centre">
+    <div id="filter-row">
+      <label>Filter: <select id="tab-filter"></select></label>
+      <label>Search: <input id="table-search" type="text" placeholder="Filter rows by text..."></label>
+      <span id="row-count"></span>
+      <button id="btn-export">Export CSV</button>
+    </div>
+    <div id="overview-panel" class="panel-view"></div>
+    <div id="visual-panel" class="panel-view"></div>
+    <div id="compare-panel" class="panel-view"></div>
+    <div id="table-wrap">
+      <table id="grid"><thead></thead><tbody></tbody></table>
+    </div>
+    <div id="bottom-pane">
+      <nav id="bottom-tabs">
+        <button data-btab="details" class="active">URL Details</button>
+        <button data-btab="inlinks">Inlinks</button>
+        <button data-btab="outlinks">Outlinks</button>
+        <button data-btab="images">Image Details</button>
+        <button data-btab="resources">Resources</button>
+        <button data-btab="info">URL Info</button>
+      </nav>
+      <div id="bottom-body">Select a URL row to see its details.</div>
+    </div>
+  </section>
+  <aside id="sidebar">
+    <h3>Overview</h3>
+    <div id="side-overview">No crawl yet.</div>
+    <h3>Response Codes</h3>
+    <div id="side-responses">-</div>
+    <h3>Indexability</h3>
+    <div id="side-indexability">-</div>
+    <h3>Issues</h3>
+    <div id="side-issues">No crawl yet.</div>
+  </aside>
+</div>
+
+<dialog id="config-dialog">
+  <form method="dialog" id="config-form">
+    <h2>Spider Configuration</h2>
+    <div class="cfg-grid">
+      <fieldset><legend>Spider</legend>
+        <label>Threads / Concurrency <input type="number" id="cfg-concurrency" min="1" max="40"></label>
+        <label>Crawl Delay (ms) <input type="number" id="cfg-delay" min="0" step="50"></label>
+        <label>Max Crawl Depth (0 = unlimited) <input type="number" id="cfg-depth" min="0"></label>
+        <label>Max URLs <input type="number" id="cfg-maxurls" min="1"></label>
+        <label><input type="checkbox" id="cfg-external"> Crawl External Links</label>
+        <label><input type="checkbox" id="cfg-resources"> Collect Resources (CSS / JS / Images)</label>
+        <label><input type="checkbox" id="cfg-imagesizes"> Check Image Sizes</label>
+        <label>Rendering
+          <select id="cfg-rendering"><option value="text">Text Only (raw HTML)</option><option value="rendered">JavaScript Rendering (rendered HTML comparison)</option></select>
+        </label>
+      </fieldset>
+      <fieldset><legend>Robots.txt</legend>
+        <label><input type="checkbox" id="cfg-robots"> Respect robots.txt</label>
+        <label>Custom robots.txt (overrides live file when filled)
+          <textarea id="cfg-customrobots" rows="5" spellcheck="false" placeholder="User-agent: *&#10;Disallow: /private/"></textarea>
+        </label>
+      </fieldset>
+      <fieldset><legend>User-Agent and Headers</legend>
+        <label>User-Agent Preset
+          <select id="cfg-uapreset">
+            <option value="spider">Seonfix Spider</option>
+            <option value="chrome">Chrome (Desktop)</option>
+            <option value="googlebot">Googlebot</option>
+            <option value="googlebot-smartphone">Googlebot Smartphone</option>
+            <option value="bingbot">Bingbot</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label>Custom User-Agent <input type="text" id="cfg-uacustom" spellcheck="false"></label>
+        <label>Cookies <input type="text" id="cfg-cookies" spellcheck="false" placeholder="name=value; name2=value2"></label>
+        <label>Custom Headers (one per line, Name: Value) <textarea id="cfg-headers" rows="3" spellcheck="false"></textarea></label>
+      </fieldset>
+      <fieldset><legend>Include / Exclude</legend>
+        <label>Include Regex (one per line) <textarea id="cfg-include" rows="3" spellcheck="false"></textarea></label>
+        <label>Exclude Regex (one per line) <textarea id="cfg-exclude" rows="3" spellcheck="false"></textarea></label>
+      </fieldset>
+      <fieldset><legend>Custom Extraction</legend>
+        <p class="hint">One per line: Name | css / regex / xpath | selector or pattern. XPath support covers a basic subset such as //tag and //tag[@attr='value'].</p>
+        <textarea id="cfg-extractors" rows="4" spellcheck="false" placeholder="Price | css | .price"></textarea>
+      </fieldset>
+      <fieldset><legend>Custom Search</legend>
+        <p class="hint">One per line: Name | contains / notcontains | text or code to find.</p>
+        <textarea id="cfg-search" rows="3" spellcheck="false" placeholder="Has Analytics | contains | googletagmanager.com"></textarea>
+      </fieldset>
+      <fieldset id="list-fieldset"><legend>List Mode URLs</legend>
+        <textarea id="cfg-listurls" rows="5" spellcheck="false" placeholder="One URL per line - used when Mode is List"></textarea>
+      </fieldset>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" id="cfg-cancel">Cancel</button>
+      <button type="button" id="cfg-save" class="primary">Save Configuration</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-dialog">
+  <h2>Settings</h2>
+  <h3>Integrations</h3>
+  <p class="hint">Google Analytics, Google Search Console, PageSpeed Insights and AI providers (OpenAI, Gemini, Anthropic, Ollama) are <b>coming in v1.1</b> and will need your own API keys / OAuth client. They are not connected in v1.0 and no data is sent anywhere.</p>
+  <fieldset disabled>
+    <label>Google Analytics Property ID <input type="text" placeholder="Coming in v1.1"></label>
+    <label>Search Console Property <input type="text" placeholder="Coming in v1.1"></label>
+    <label>PageSpeed Insights API Key <input type="text" placeholder="Coming in v1.1"></label>
+    <label>OpenAI API Key <input type="text" placeholder="Coming in v1.1"></label>
+  </fieldset>
+  <h3>Recent Crawls</h3>
+  <div id="recent-list">None yet.</div>
+  <div class="dialog-actions"><button type="button" id="settings-close" class="primary">Close</button></div>
+</dialog>
+
+<dialog id="about-dialog">
+  <h2>About Seonfix Spider</h2>
+  <p id="about-body">Seonfix Spider</p>
+  <p class="hint">A local website crawler for technical SEO audits. Crawls run entirely on this computer; no API keys are required for the core crawler.</p>
+  <div class="dialog-actions"><button type="button" id="about-close" class="primary">Close</button></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
