@@ -1,6 +1,6 @@
 {
   "name": "seonfix-spider",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "productName": "Seonfix Spider",
   "description": "Seonfix Spider - a local website crawler for technical SEO audits on macOS and Windows",
   "license": "MIT",
@@ -8,7 +8,8 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/urlutil.test.js test/robots.test.js test/extract.test.js test/issues.test.js test/sitemap.test.js test/crawler.test.js",
+    "test": "node --test test/*.test.js",
+    "wordlist": "node scripts/make-wordlist.js",
     "test:app": "node scripts/run-smoke.js",
     "live": "node scripts/live-crawl.js",
     "icons": "python3 scripts/make-icons.py",

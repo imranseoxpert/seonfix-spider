@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'none'">
+<title>Seonfix Spider - Visualisations</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+body { padding: 10px; overflow: auto; }
+#vis-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+#vis-tabs button.active { background: #00C852; color: #06230f; font-weight: 700; }
+#vis-body { background: #12161b; border: 1px solid #2b333d; border-radius: 6px; padding: 10px; min-height: 560px; }
+.dir-line { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 1px 0; white-space: pre; }
+</style>
+</head>
+<body>
+<nav id="vis-tabs">
+  <button data-view="crawl-tree">Crawl Tree Graph</button>
+  <button data-view="directory-tree">Directory Tree Graph</button>
+  <button data-view="force">Force Directed Graph</button>
+</nav>
+<div id="vis-body">Loading crawl data...</div>
+<script src="visual.js"></script>
+</body>
+</html>

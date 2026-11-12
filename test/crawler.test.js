@@ -10,7 +10,7 @@ function page(title, body, extraHead = '') {
 }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
-function buildServer() {
+function buildServer(externalBase = 'http://example.org') {
   const routes = {
     '/': () => page('Home Fixture Page Title For Testing', `
       <h1>Home</h1><p>${WORDS}</p>
@@ -18,7 +18,7 @@ function buildServer() {
       <a href="/missing-title">MT</a><a href="/noindex">NI</a><a href="/redirect1">R</a>
       <a href="/chain1">CH</a><a href="/loop1">L</a><a href="/missing">404</a>
       <a href="/private/blocked">P</a><a href="/hreflang">H</a><a href="/hreflang-b">HB</a>
-      <a href="http://example.org/external-page">External</a>
+      <a href="${externalBase}/external-page">External</a>
       <img src="/img.png" alt="A picture"><img src="/noalt.png">`),
     '/a': () => page('Page A Unique Title For Testing', `<h1>A</h1><p>${WORDS}</p><a href="/">Home</a>`),
     '/b': () => page('Page B Unique Title For Testing', `<h1>B</h1><p>${WORDS} extra unique words about bicycles and mountains</p><a href="/">Home</a>`),
@@ -48,7 +48,13 @@ function buildServer() {
 }
 
 test('crawler integration: fixture site audit matches expectations', async () => {
-  const server = buildServer();
+  // v2: externals are really fetched now, so the fixture external lives on a
+  // second local origin (hermetic — no internet) and counts its hits.
+  let extHits = 0;
+  const extServer = http.createServer((req, res) => { extHits++; res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<html><head><title>Ext</title></head><body>external</body></html>'); });
+  await new Promise((r) => extServer.listen(0, '127.0.0.1', r));
+  const extBase = `http://127.0.0.1:${extServer.address().port}`;
+  const server = buildServer(extBase);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/`;
   try {
@@ -68,19 +74,22 @@ test('crawler integration: fixture site audit matches expectations', async () =>
     assert.ok(at('/loop1').issues.includes('Redirect Loop'));
     assert.equal(at('/noindex').indexability, 'Non-Indexable');
     assert.equal(at('/noindex').indexabilityReason, 'Noindex');
-    assert.ok(at('/missing-title').issues.includes('Page Title: Missing'));
-    assert.ok(at('/dup1').issues.includes('Page Title: Duplicate'));
+    assert.ok(at('/missing-title').issues.includes('Page Titles: Missing')); // v2 SF naming
+    assert.ok(at('/dup1').issues.includes('Page Titles: Duplicate'));
     assert.ok(at('/dup2').issues.includes('Near Duplicate Content') || at('/dup2').nearDuplicateOf, 'near duplicate flagged');
-    assert.ok(at('/').issues.includes('Images: Missing Alt Text'));
+    assert.ok(at('/').issues.includes('Images: Missing Alt Attribute')); // v2: SF splits missing alt text (empty alt) from missing alt attribute (no alt at all, this fixture)
     assert.equal(at('/private/blocked').status, 'Blocked by robots.txt');
-    assert.ok(at('/hreflang').issues.some((i) => i.startsWith('hreflang:')), 'hreflang issue flagged');
+    assert.ok(at('/hreflang').issues.some((i) => i.toLowerCase().startsWith('hreflang:')), 'hreflang issue flagged');
     assert.ok(at('/target').issues.includes('Orphan Pages (No Inlinks)'), 'redirect target is orphan');
     const ext = crawl.pages.find((p) => p.external);
-    assert.ok(ext && ext.address.includes('example.org'), 'external stub recorded');
+    assert.ok(ext && ext.address.includes('/external-page'), 'external page recorded');
+    assert.equal(ext.statusCode, 200, 'external URL was fetched for its status');
+    assert.equal(extHits, 1, 'external URL fetched exactly once');
     assert.ok(at('/a').uniqueInlinks >= 1);
     assert.ok(crawl.issues.length >= 8, `issues summary has ${crawl.issues.length} entries`);
   } finally {
-    server.close();
+    server.close(); if (server.closeAllConnections) server.closeAllConnections();
+    extServer.close(); if (extServer.closeAllConnections) extServer.closeAllConnections();
   }
 });
 
@@ -93,5 +102,5 @@ test('list mode audits only the given URLs', async () => {
     const crawl = await crawler.crawl([base + '/a', base + '/b'], base + '/a');
     const urls = crawl.pages.filter((p) => !p.external).map((p) => p.address);
     assert.deepEqual(urls.sort(), [base + '/a', base + '/b'].sort());
-  } finally { server.close(); }
+  } finally { server.close(); if (server.closeAllConnections) server.closeAllConnections(); }
 });

@@ -1,62 +1,126 @@
 # Seonfix Spider
 
-A local website crawler for technical SEO audits, for macOS and Windows.
-Crawls run entirely on your own computer - the core crawler needs no API
-keys, no backend and no account. Built with Electron (plain JavaScript).
+A local website crawler for technical SEO audits, for macOS and Windows,
+modelled on the Screaming Frog SEO Spider workflow (v2.0 rebuilds the
+interface to match the reference layout: same tab order, same right-hand
+Overview tree, same bottom pane). Crawls run entirely on your own computer -
+the core crawler needs no API keys, no backend and no account. Built with
+Electron (plain JavaScript).
 
-## What it does
+**Theme: dark.** The interface keeps a dark charcoal theme with the Seonfix
+brand green (#00C852) as the accent colour.
 
-- Crawl modes: Spider (crawl from a start URL), List (audit a list of URLs),
-  Sitemap (audit the URLs in an XML sitemap).
-- Concurrent crawler with configurable threads, crawl delay, max depth and
-  max URLs (default 10,000 - there is no 500-URL free limit). Include /
-  exclude regex rules, user-agent presets (Seonfix Spider, Chrome, Googlebot,
-  Googlebot Smartphone, Bingbot, custom), custom headers and cookies,
-  robots.txt respect / ignore, and a custom robots.txt override you can test
-  before publishing.
-- Redirects are followed with the full chain recorded; chains and loops are
-  detected and reported.
-- Per-URL data: status code and status, content type, response time and
-  size, indexability and the reason for it, page title (length and
-  approximate pixel width), meta description, meta keywords, H1 / H2,
-  meta robots and X-Robots-Tag, canonical(s), hreflang, rel next / prev
-  pagination, word count, text ratio, crawl depth, inlinks / outlinks
-  (total, unique, external), images with alt text and file size, resources
-  (CSS / JS), structured data types (JSON-LD and microdata), MD5 content
-  hash for exact duplicates and simhash for near duplicates.
-- Issues engine with 40+ rules: missing / duplicate / over-long / over-short
-  titles, meta descriptions, H1 and H2; 4xx, 5xx, 3xx, redirect chains and
-  loops; no response; blocked by robots.txt; noindex / nofollow;
-  canonicalised, missing canonical, multiple canonicals, canonical pointing
-  to a non-indexable URL; orphan pages; low word count; URL problems (long,
-  uppercase, underscores, non-ASCII, parameters); missing image alt text and
-  images over 100 KB; hreflang return-tag / language-code problems; HTTP
-  pages, mixed content and missing security headers. Every issue has a
-  severity (Error / Warning / Opportunity), a URL count and a percentage.
-- Interface: tabbed data grids (Overview, Internal, External, Response
-  Codes, Protocol, URL, Page Titles, Meta Description, Meta Keywords, H1,
-  H2, Images, Canonicals, Pagination, Directives, hreflang, Structured Data,
-  Sitemaps, Custom Extraction, Custom Search, Visualisation, Crawl Compare)
-  with per-tab filters, text search and sortable columns; a right-hand
-  Overview / Issues sidebar (click an issue to filter); a bottom pane with
-  URL Details, Inlinks, Outlinks, Image Details, Resources and URL Info
-  (response headers and redirect chain). Double-click a row to open the URL.
-- Custom Extraction with CSS selectors and regular expressions, plus a
-  basic XPath subset (for example //h1 or //meta[@name='description']).
-  Full XPath expressions beyond that subset are not supported.
-- Custom Search: contains / does-not-contain rules over page source.
-- JavaScript rendering mode (Configuration - Rendering): pages are also
-  loaded in a hidden Chromium window and the rendered title, H1 and link
-  count are compared with the raw HTML; differences are flagged on the URL
-  Details pane. Raw text mode is the default.
-- Save Crawl / Open Crawl (JSON project file), recent crawl list, and Crawl
-  Comparison between two saved crawls (new / removed / changed URLs and
-  issue deltas).
-- Exports: per-tab CSV, a bulk CSV bundle with one section per tab, a
-  Redirect Chains report (CSV), and XML Sitemap + Image Sitemap generation
-  from the crawl. The bulk export is CSV, not native XLSX.
-- Site structure visualisation: radial crawl graph coloured by status code
-  plus a directory tree breakdown.
+## Layout (v2)
+
+- **Header:** logo + wordmark, URL bar with a history dropdown (recent URLs
+  + "<Clear All>"), a scope dropdown (**Subdomain** / **Subfolder** /
+  **All Subdomains** / **Exact URL**), Start/Pause + Clear buttons, and a
+  green "Crawl NN%" progress bar.
+- **Main tabs (default order):** Internal, External, Security, Response
+  Codes, URL, Page Titles, Meta Description, H1, H2, Content, Images,
+  Canonicals, Pagination, Directives, Hreflang, JavaScript, Links, AMP,
+  Structured Data, Sitemaps, PageSpeed, Custom Search, Custom Extraction,
+  Analytics, Search Console, Accessibility, Spelling, plus a Compare view.
+  The "…" button opens **Configure Tabs** (show/hide tabs, Reset Tabs;
+  persisted). Tabs scroll horizontally when they overflow.
+  *Note: the Meta Keywords tab from v1 was removed in v2 at the user's
+  request; the raw `metaKeywords` field is still stored in crawl records.*
+- **Toolbar:** filter dropdown (shows the active filter name), grid/tree
+  view toggle (tree groups rows by directory), Export, centred Search, and
+  a columns show/hide popup.
+- **Grid:** numbered rows (1, 2, 3, …), Screaming-Frog-style column sets per
+  tab, "No data" placeholder, rows stream in live during a crawl, and a
+  "Selected Cells: N  Filter Total: N" line under the grid.
+- **Bottom pane:** URL Details / Inlinks / Outlinks / Images (with preview
+  pane + Zoom) / Resources / HTTP Headers / Rendered Text / SERP Snippet
+  (Google-style snippet preview).
+- **Right sidebar tabs:** Overview, Issues, Site Structure, Segments,
+  Response Times, API, Spelling.
+  - *Overview:* Summary rows (Total URLs Encountered, blocked by robots.txt,
+    URLs Crawled, Internal / External, Indexable / Non-Indexable) and a
+    collapsible tree with a filter section for every category: Crawl Data
+    Internal/External, Security, Response Codes (incl. the Internal
+    subtree), URL, Page Titles, Meta Description, H1, H2, Content, Images,
+    Canonicals, Pagination, Directives, Hreflang, JavaScript, Links.
+    Clicking a row highlights it green, filters the grid, and draws the
+    chart below (SVG donut for Crawl Data / Response Codes, SVG bar chart
+    for other sections).
+  - *Issues:* chips [Issues][Warnings][Opportunities][Total] that filter
+    the table (Issue Name | Issue Type | Issue Priority | URLs | % of
+    Total), a details pane with a real description per issue, and
+    double-click to filter the grid to the affected URLs.
+  - *Site Structure:* directory aggregation table + Crawl Depth stacked bar
+    chart (Blocked by robots.txt / No Response / 2xx / 3xx / 4xx / 5xx)
+    with View and Max Level controls.
+  - *Segments:* populated by segments defined in Configuration (name + URL
+    pattern); otherwise shows the empty-state text.
+  - *Response Times:* average + per-second bucket table and chart.
+  - *API:* PageSpeed Insights - with an API key saved in Configuration it
+    fetches live performance score / LCP / CLS / TBT for crawled HTML URLs.
+  - *Spelling:* spelling/grammar summary from the built-in spell check.
+- **Footer:** "Spider Mode: Idle/Active" (left) and
+  "N of M (NN%) R Remaining" (right).
+
+## Crawl engine
+
+- **Modes (Mode menu, radio):** Spider, List, SERP (URLs crawled without
+  following; use the SERP Snippet bottom pane), Compare.
+- **Scope** controls what counts as internal: Subdomain = the start URL's
+  own host (www-insensitive, port-aware); Subfolder = the start path
+  subtree; All Subdomains = any subdomain of the registrable domain;
+  Exact URL = only that URL. CDN host patterns (Configuration > CDNs) also
+  count as internal.
+- Concurrent crawler with configurable threads, delay, max depth and max
+  URLs (default 10,000 - no 500-URL free limit). Resources (CSS/JS/images)
+  are crawled as their own rows. **External URLs are fetched once each**
+  for status code / content type / response time and are never followed.
+  Include / exclude regex, URL rewrite rules, user-agent presets (Seonfix
+  Spider, Chrome, Googlebot, Googlebot Smartphone, Bingbot, custom),
+  custom headers, cookies, Basic auth, robots.txt respect + custom
+  robots.txt override, sitemap discovery (robots.txt + /sitemap.xml +
+  /sitemap_index.xml, one index level) with in-sitemap / orphan /
+  non-indexable classification.
+- Redirects followed with full chains; chains and loops detected.
+- **Filter registry:** 208 named filters (single source of truth) drive the
+  sidebar counts, grid filtering and exports, so they always agree.
+- **Issues catalogue:** every issue carries an SF-style type
+  (Issue / Warning / Opportunity) and priority (High / Medium / Low).
+- **Link Score:** internal PageRank-style iteration over the crawl graph,
+  normalised 0-100.
+- **Content analysis:** word/sentence counts, Flesch reading ease +
+  readability band, exact + near duplicates (configurable threshold),
+  low content, soft-404 heuristic, lorem ipsum detection.
+- **Security checks:** HSTS / CSP / X-Content-Type-Options / X-Frame-Options
+  / Referrer-Policy presence, mixed content, insecure forms, unsafe
+  cross-origin links, protocol-relative resources, bad content type.
+- **Spelling:** bundled ~16,700-word English list (generated by
+  `npm run wordlist` from local text corpora + a curated core, with a
+  common-misspellings denylist); unknown-token counts per page feed the
+  Content filters and the Spelling tab. **Grammar is not checked** (counts
+  stay 0 - a language-tool integration would be required; nothing is faked).
+- **JavaScript rendering mode** (Configuration > Spider > Rendering):
+  rendered-vs-raw differences for title, canonical, meta description and
+  H1 feed the JavaScript tab; blocked resources are recorded. Text-only
+  (raw) is the default.
+- **Structured data:** per-URL types and item counts (JSON-LD + microdata)
+  with simple required-property warnings for common types (Article,
+  Product, FAQPage…). **AMP:** rel=amphtml discovery + basic flags.
+- Save / Open crawl (JSON, format version 2; v1 files are auto-upgraded on
+  open), Open Recent, profiles (load/save/default, JSON in userData),
+  Crawl Compare (two saved crawls), and **Scheduling** (File > Scheduling:
+  start URL, time, daily/weekly, export folder; due schedules run a crawl
+  and auto-export Internal + Issues CSVs - *only while Seonfix Spider is
+  open*, as the dialog states).
+- **Bulk Export** menu exports a real CSV per dataset (Queued URLs, Links,
+  Web, Path Type, per-section datasets, Custom Search/Extraction, URL
+  Inspection, Issues). **Reports** menu generates real files: Crawl
+  Overview (HTML), Redirect Chains, Redirects, Orphan Pages, SERP Summary,
+  Canonical Errors, Insecure Content, Structured Data, HTTP Headers,
+  Cookies (from Set-Cookie headers collected during the crawl).
+- **Sitemaps** menu: XML + Image sitemap generation with
+  priority/changefreq/lastmod options. **Visualisations** window: Crawl
+  Tree (radial), Directory Tree, Force Directed. **Crawl Analysis >
+  Analyse** recomputes Link Score, orphans and near-duplicate groups.
 
 ## Run locally
 
@@ -65,9 +129,9 @@ keys, no backend and no account. Built with Electron (plain JavaScript).
 
 ## Tests
 
-    npm test          # unit + fixture-server integration tests (node --test)
-    npm run test:app  # Electron GUI smoke test (needs a display or Xvfb)
-    npm run live      # real live crawl of https://example.com (max 10 URLs)
+    npm test          # unit + fixture-server integration tests (30 tests)
+    npm run test:app  # Electron GUI smoke test (59 checks; needs Xvfb/display)
+    npm run live      # live crawl of https://mdimrankhan.com capped at 200 URLs
 
 ## Build installers
 
@@ -78,30 +142,29 @@ Installers are unsigned: on macOS right-click the app and choose Open the
 first time; on Windows choose "More info" then "Run anyway" in SmartScreen.
 
 Releases are built by .github/workflows/release.yml when a GitHub Release is
-published (or run manually with an existing release tag): it runs the unit
-tests, builds on macOS and Windows, and uploads the .dmg / .exe to the
-release. This project is private - do not publish it publicly.
+published (or run manually with an existing release tag). This project is
+private - do not publish it publicly.
 
 ## App icon
 
-The icon is an original design drawn programmatically (a geometric emerald
-spider on a dark charcoal rounded square, with a small web arc). Source:
-build/logo.svg; regenerate all sizes (PNG, ICO, ICNS, iconset) with:
+Original design drawn programmatically (a geometric emerald spider on a
+dark charcoal rounded square, with a small web arc). Source: build/logo.svg;
+regenerate all sizes (PNG, ICO, ICNS, iconset) with `npm run icons`
+(python3 + Pillow).
 
-    npm run icons     # python3 + Pillow
+## Honest deferrals - NOT implemented (nothing is faked)
 
-## v1.0 scope - what is NOT implemented yet (roadmap)
-
-These are shown in Settings as disabled placeholders only; nothing is faked
-and no data leaves the computer:
-
-- Google Analytics, Google Search Console and PageSpeed Insights
-  integrations (planned for v1.1; they will need your own Google API key /
-  OAuth client).
-- AI integrations (OpenAI, Gemini, Anthropic, Ollama).
-- Ahrefs / Moz / Majestic link metrics.
-- Scheduled crawls and command-line automation.
-- Spelling and grammar checking, and accessibility (AXE) auditing.
+- Google Analytics and Google Search Console data pulls (the tabs and
+  config fields exist; pulling data needs Google OAuth, not yet connected).
+- Full AMP validation (only discovery + basic flags).
+- AI provider integrations (OpenAI, Gemini, Anthropic, Ollama) and backlink
+  APIs (Ahrefs / Moz / Majestic) - config fields are stored-only.
 - Log file analysis mode.
-- Native XLSX export (CSV only for now, see above).
-- Full XPath support in Custom Extraction (basic subset only, see above).
+- Real grammar checking (see Spelling above; grammar counts stay 0).
+- Web Form authentication (fields stored; automated form login not
+  implemented - use Basic auth or cookies).
+- The "Broken Bookmarks" URL filter (fragment targets cannot be verified
+  from crawl data alone; it currently matches nothing).
+- "URL: Internal Search" / hash-style checks are basic pattern checks.
+- Native XLSX export (CSV only).
+- Full XPath support in Custom Extraction (basic subset only).

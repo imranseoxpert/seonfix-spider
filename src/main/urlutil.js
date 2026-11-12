@@ -79,4 +79,64 @@ function shouldInclude(url, config) {
   return true;
 }
 
-module.exports = { normalizeUrl, ensureUrl, originOf, hostOf, isInternal, crawlDepthOf, directoryOf, pixelWidth, matchPattern, shouldInclude };
+/* ---- v2: crawl scope classification (Screaming Frog semantics) ---- */
+function stripWww(host) { return String(host || '').replace(/^www\./i, ''); }
+
+const TWO_PART_TLDS = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'com.br', 'co.in', 'com.cn', 'co.jp', 'co.kr', 'com.mx', 'co.za', 'com.sg', 'com.hk', 'com.tw', 'co.il', 'com.tr', 'com.pl', 'com.co', 'com.ar', 'com.pe', 'com.ve', 'com.my', 'com.ph', 'com.pk', 'com.bd', 'com.np', 'com.lk', 'co.id', 'com.vn', 'com.eg', 'com.ng', 'com.ke', 'com.gh', 'com.ua', 'com.ru']);
+
+function registrableDomain(host) {
+  const h = stripWww(String(host || '').toLowerCase());
+  const parts = h.split('.').filter(Boolean);
+  if (parts.length <= 2) return h;
+  const lastTwo = parts.slice(-2).join('.');
+  if (TWO_PART_TLDS.has(lastTwo)) return parts.slice(-3).join('.');
+  return lastTwo;
+}
+
+/* Is `url` internal to the crawl rooted at `rootUrl` under the given scope?
+ * scope: 'subdomain' (default) | 'subfolder' | 'all-subdomains' | 'exact' */
+function classifyInternal(url, rootUrl, scope = 'subdomain') {
+  let u, r;
+  try { u = new URL(url); r = new URL(rootUrl); } catch (_) { return false; }
+  if (scope === 'exact') return normalizeUrl(url) === normalizeUrl(rootUrl);
+  if (scope === 'subfolder') {
+    if (u.origin !== r.origin) return false;
+    const rootPath = r.pathname;
+    const dir = rootPath.endsWith('/') ? rootPath : rootPath.replace(/[^/]*$/, '');
+    return u.pathname === rootPath || u.pathname.startsWith(dir);
+  }
+  if (scope === 'all-subdomains') {
+    return registrableDomain(u.hostname) === registrableDomain(r.hostname);
+  }
+  // subdomain (SF semantics): the start URL's own subdomain only — same host
+  // (host includes the port, so a different port is a different site),
+  // www-insensitive. Other subdomains of the domain are EXTERNAL here; they
+  // belong to the 'all-subdomains' scope.
+  const uh = stripWww(u.host.toLowerCase());
+  const rh = stripWww(r.host.toLowerCase());
+  return uh === rh;
+}
+
+/* Directory chain for site-structure aggregation:
+ * https://ex.com/a/b/page -> ['https/', 'https/ex.com/', 'https/ex.com/a/', 'https/ex.com/a/b/'] */
+function directoryChain(url) {
+  try {
+    const u = new URL(url);
+    const out = [`${u.protocol}/`, `${u.protocol}/${u.host}/`];
+    const parts = u.pathname.split('/').filter(Boolean);
+    let cur = `${u.protocol}/${u.host}/`;
+    for (let i = 0; i < parts.length - 1; i++) { cur += parts[i] + '/'; out.push(cur); }
+    return out;
+  } catch (_) { return []; }
+}
+
+function directoryOfUrl(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (!parts.length) return `${u.protocol}/${u.host}/`;
+    return `${u.protocol}/${u.host}/` + (parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '');
+  } catch (_) { return '/'; }
+}
+
+module.exports = { normalizeUrl, ensureUrl, originOf, hostOf, isInternal, crawlDepthOf, directoryOf, pixelWidth, matchPattern, shouldInclude, stripWww, registrableDomain, classifyInternal, directoryChain, directoryOfUrl };
