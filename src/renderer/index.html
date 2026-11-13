@@ -34,6 +34,7 @@
       <div class="tool-group">
         <svg viewBox="0 0 16 16" width="13" height="13" class="tool-ico"><path d="M2 3h12L9.5 9v4l-3 1.5V9L2 3z" fill="#9fb0bf"/></svg>
         <select id="filter-select" title="Current filter"></select>
+        <select id="scope-filter" class="hidden" title="Internal / External"><option value="all">Internal &amp; External</option><option value="internal">Internal</option><option value="external">External</option></select>
         <button id="view-grid" class="tool-btn active" title="Grid view"><svg viewBox="0 0 16 16" width="13" height="13"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="currentColor"/></svg></button>
         <button id="view-tree" class="tool-btn" title="Tree view"><svg viewBox="0 0 16 16" width="13" height="13"><path d="M3 2v12M3 4h5M3 8h8M3 12h5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></button>
         <button id="btn-export">Export</button>
@@ -54,11 +55,18 @@
         <button data-btab="details" class="active">URL Details</button>
         <button data-btab="inlinks">Inlinks</button>
         <button data-btab="outlinks">Outlinks</button>
-        <button data-btab="images">Images</button>
+        <button data-btab="images">Image Details</button>
         <button data-btab="resources">Resources</button>
-        <button data-btab="headers">HTTP Headers</button>
-        <button data-btab="rendered">Rendered Text</button>
         <button data-btab="serp">SERP Snippet</button>
+        <button data-btab="rendered">Rendered Page</button>
+        <button data-btab="console">Chrome Console Log</button>
+        <button data-btab="source">View Source</button>
+        <button data-btab="headers">HTTP Headers</button>
+        <button data-btab="cookies">Cookies</button>
+        <button data-btab="duplicates">Duplicate Details</button>
+        <button data-btab="structured">Structured Data Details</button>
+        <button data-btab="spelling">Spelling &amp; Grammar</button>
+        <button data-btab="a11y">Accessibility</button>
       </nav>
       <div id="bottom-body">No URL selected</div>
     </div>
@@ -82,6 +90,7 @@
 </div>
 <footer id="statusbar">
   <span id="mode-status">Spider Mode: Idle</span>
+  <span id="crawl-rate"></span>
   <span id="crawl-counts"></span>
 </footer>
 
@@ -109,6 +118,13 @@
   <p class="hint">One URL per line. Used by List and SERP modes (Configuration or the Mode menu sets the mode).</p>
   <textarea id="list-urls" rows="12" spellcheck="false" placeholder="https://example.com/page-1&#10;https://example.com/page-2"></textarea>
   <div class="dialog-actions"><button type="button" id="list-cancel">Cancel</button><button type="button" id="list-go" class="primary">Start</button></div>
+</dialog>
+
+<dialog id="serp-dialog">
+  <h2>SERP Mode</h2>
+  <p class="hint">Nothing is crawled in SERP mode. Paste or upload rows of URL, Title, Description (CSV or tab-separated, optional header row) to preview how titles and meta descriptions will display and where they get truncated.</p>
+  <textarea id="serp-input" rows="12" spellcheck="false" placeholder="URL,Title,Description&#10;https://example.com/,Example Title,Example meta description"></textarea>
+  <div class="dialog-actions"><label class="file-btn">Upload File... <input type="file" id="serp-file" accept=".csv,.tsv,.txt"></label><span class="spacer"></span><button type="button" id="serp-cancel">Cancel</button><button type="button" id="serp-go" class="primary">Analyse</button></div>
 </dialog>
 
 <dialog id="sitemap-dialog">

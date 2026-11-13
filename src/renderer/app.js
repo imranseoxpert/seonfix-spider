@@ -18,7 +18,8 @@ let state = {
   stab: 'overview', sideFilter: null, sideSection: null, issueChip: 'Total', selectedIssue: null,
   visibleTabs: lsGet('visibleTabs', DEFAULT_TAB_ORDER), hiddenCols: lsGet('hiddenCols', {}),
   mode: 'spider', psi: [], schedules: [], hasPsiKey: false, recentUrls: [],
-  bottomSearch: '', focusMode: false,
+  bottomSearch: '', focusMode: false, scopeFilter: 'all', collapsed: new Set(lsGet('collapsedSections', [])),
+  linkTypeFilter: 'all', linkPosFilter: 'all', rate: { started: 0, samples: [] },
 };
 window.__spiderState = state;
 
@@ -72,10 +73,10 @@ function tabRows() {
   const t = currentTab();
   let rows;
   if (t.imagesTab) rows = imageRows(cr);
-  else if (t.psiTab) rows = state.psi;
   else if (!t.rows) rows = [];
   else rows = t.rows(cr);
   if (state.filterId && state.filterId !== 'all') rows = rows.filter((r) => (r.filters || []).includes(state.filterId));
+  if (t.id === 'responses' && state.scopeFilter !== 'all') rows = rows.filter((r) => (state.scopeFilter === 'external' ? !!r.external : !r.external));
   if (state.issueName) rows = rows.filter((r) => (r.issues || []).includes(state.issueName) || (r._page && (r._page.issues || []).includes(state.issueName)));
   if (state.search) { const q = state.search.toLowerCase(); rows = rows.filter((r) => JSON.stringify(r).toLowerCase().includes(q)); }
   if (state.sortKey) {
@@ -96,7 +97,7 @@ function visibleColumns() {
 function renderTabs() {
   const vis = TABS.filter((t) => state.visibleTabs.includes(t.id));
   $('#tabs').innerHTML = vis.map((t) => `<button data-tab="${t.id}" class="${t.id === state.tab ? 'active' : ''}">${esc(t.label)}</button>`).join('') + '<button id="tabs-overflow" title="Configure tabs">&gt;&gt;</button>';
-  document.querySelectorAll('#tabs button[data-tab]').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; state.filterId = 'all'; state.issueName = null; renderAll(); }));
+  document.querySelectorAll('#tabs button[data-tab]').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; state.filterId = 'all'; state.issueName = null; focusSidebarOnTab(state.tab); renderAll(); scrollSidebarToSection(); }));
   $('#tabs-overflow').addEventListener('click', (e) => { e.stopPropagation(); renderTabsPopup(); $('#tabs-popup').classList.toggle('hidden'); });
 }
 function renderTabsPopup() {
@@ -113,10 +114,12 @@ function renderToolbar() {
   const filters = tabFilters(t);
   if (!filters.some((f) => f.id === state.filterId)) state.filterId = 'all';
   $('#filter-select').innerHTML = filters.map((f) => `<option value="${esc(f.id)}" ${f.id === state.filterId ? 'selected' : ''}>${esc(f.name)}</option>`).join('');
+  $('#scope-filter').classList.toggle('hidden', t.id !== 'responses');
+  $('#scope-filter').value = state.scopeFilter;
   $('#view-grid').classList.toggle('active', state.view === 'grid');
   $('#view-tree').classList.toggle('active', state.view === 'tree');
   const note = $('#tab-note');
-  if (t.note && (!state.crawl || t.psiTab || !(t.rows && t.rows(state.crawl).length))) { note.textContent = t.note; note.classList.remove('hidden'); }
+  if (t.note && (!state.crawl || !(t.rows && t.rows(state.crawl).length))) { note.textContent = t.note; note.classList.remove('hidden'); }
   else note.classList.add('hidden');
 }
 function directoryOf(address) {
@@ -187,51 +190,96 @@ function serpSnippet(p) {
   const crumb = host + (pathParts.length ? ' › ' + pathParts.join(' › ') : '');
   return `<div class="serp-card"><div class="serp-url">${esc(crumb)}</div><div class="serp-title">${esc(p.title || p.address)}</div><div class="serp-desc">${esc(p.metaDescription || (p.textExcerpt || '').slice(0, 160))}</div></div>`;
 }
+function simhashSim(a, b) {
+  try { let x = BigInt(a) ^ BigInt(b); let d = 0; while (x) { d += Number(x & 1n); x >>= 1n; } return 1 - d / 64; } catch (_) { return 0; }
+}
+function kvTable(rows) { return '<table class="kv">' + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>'; }
+function linkFilterBar(rows) {
+  const positions = [...new Set(rows.map((r) => r.position || 'Content'))].sort();
+  return `<select data-ltype><option value="all" ${state.linkTypeFilter === 'all' ? 'selected' : ''}>All Link Types</option><option value="follow" ${state.linkTypeFilter === 'follow' ? 'selected' : ''}>Follow</option><option value="nofollow" ${state.linkTypeFilter === 'nofollow' ? 'selected' : ''}>Nofollow</option></select>` +
+    `<select data-lpos><option value="all">All Link Positions</option>${positions.map((p) => `<option ${state.linkPosFilter === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>`;
+}
+function filterLinkRows(rows) {
+  return rows.filter((r) => (state.linkTypeFilter === 'all' || (state.linkTypeFilter === 'follow') === !!r.follow)
+    && (state.linkPosFilter === 'all' || (r.position || 'Content') === state.linkPosFilter)
+    && (!state.bottomSearch || JSON.stringify(r).toLowerCase().includes(state.bottomSearch.toLowerCase())));
+}
 function renderBottom() {
   const p = state.selected; const body = $('#bottom-body');
   document.querySelectorAll('#bottom-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.btab === state.btab));
-  if (!p) { body.innerHTML = state.btab === 'images' ? 'No URL selected' : 'No URL selected'; return; }
+  if (!p) { body.innerHTML = '<div class="empty-big">No URL selected</div>'; return; }
   const pages = state.crawl ? state.crawl.pages : state.livePages;
-  const byAddr = new Map(pages.map((x) => [x.address, x]));
-  if (state.btab === 'details') {
-    const kv = [['Address', p.address], ['Content Type', p.contentType || p.contentCategory], ['Status Code', p.statusCode], ['Status', p.status], ['Indexability', (p.indexability || '') + (p.indexabilityReason ? ' - ' + p.indexabilityReason : '')], ['Title 1', p.title], ['Title Length / Pixels', `${p.titleLength ?? ''} / ${p.titlePixelWidth ?? ''}`], ['Meta Description 1', p.metaDescription], ['H1-1', (p.h1s || [])[0] || ''], ['H2-1', (p.h2s || [])[0] || ''], ['Canonical 1', p.canonical], ['Meta Robots 1', p.metaRobots], ['X-Robots-Tag', p.xRobotsTag], ['Word Count', p.wordCount], ['Sentence Count', p.sentenceCount], ['Readability', p.readability ? `${p.readability} (${p.flesch ?? ''})` : ''], ['Crawl Depth', p.depth], ['Link Score', p.linkScore], ['Inlinks / Unique', `${p.inlinks ?? ''} / ${p.uniqueInlinks ?? ''}`], ['Outlinks / Internal / External', `${p.outlinks ?? ''} / ${p.internalOutlinks ?? ''} / ${p.externalOutlinks ?? ''}`], ['Response Time (s)', typeof p.responseTimeMs === 'number' ? Math.round(p.responseTimeMs) / 1000 : ''], ['Size (bytes)', p.sizeBytes], ['Redirect URL', p.redirectUrl], ['In Sitemap', p.inSitemap ? 'Yes' : 'No'], ['Content Hash (MD5)', p.hash], ['Near Duplicate Of', p.nearDuplicateOf || ''], ['Spelling Errors', p.spellingErrors ?? 0], ['Issues', (p.issues || []).join('; ')]];
-    body.innerHTML = '<div class="bt-toolbar"><button data-bexport>Export</button></div><table class="kv">' + kv.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>';
-  } else if (state.btab === 'inlinks') {
-    const rows = [];
-    for (const q of pages) for (const l of q.links || []) if (l.url === p.address) rows.push({ from: q.address, type: q.contentCategory === 'HTML' ? 'Hyperlink' : (q.contentCategory || 'Hyperlink'), anchor: l.anchor, alt: '', follow: l.follow });
-    body.innerHTML = `<div class="bt-toolbar"><select><option>All Link Types</option></select><select><option>All Link Origin Types</option></select><button data-bexport>Export</button><input type="text" placeholder="Search..." data-bsearch value="${esc(state.bottomSearch)}"></div>` +
-      (rows.length ? '<table><tr><th>Type</th><th>From</th><th>Anchor Text</th><th>Alt Text</th><th>Follow</th><th>To</th></tr>' + rows.filter((r) => !state.bottomSearch || JSON.stringify(r).toLowerCase().includes(state.bottomSearch.toLowerCase())).map((r) => `<tr><td>${esc(r.type)}</td><td>${esc(r.from)}</td><td>${esc(r.anchor)}</td><td>${esc(r.alt)}</td><td>${r.follow ? 'Follow' : 'Nofollow'}</td><td>${esc(p.address)}</td></tr>`).join('') + '</table>' : 'No inlinks in this crawl.');
-  } else if (state.btab === 'outlinks') {
-    body.innerHTML = `<div class="bt-toolbar"><button data-bexport>Export</button><input type="text" placeholder="Search..." data-bsearch value="${esc(state.bottomSearch)}"></div>` +
-      ((p.links || []).length ? '<table><tr><th>From</th><th>To</th><th>Anchor Text</th><th>Follow</th></tr>' + p.links.filter((l) => !state.bottomSearch || JSON.stringify(l).toLowerCase().includes(state.bottomSearch.toLowerCase())).map((l) => `<tr><td>${esc(p.address)}</td><td>${esc(l.url)}</td><td>${esc(l.anchor)}</td><td>${l.follow ? 'Follow' : 'Nofollow'}</td></tr>`).join('') + '</table>' : 'No outlinks recorded.');
-  } else if (state.btab === 'images') {
+  const searchBox = `<input type="text" placeholder="Search..." data-bsearch value="${esc(state.bottomSearch)}">`;
+  const bt = state.btab;
+  if (bt === 'details') {
+    const kv = [['Address', p.address], ['Content Type', p.contentType || p.contentCategory], ['Status Code', p.statusCode], ['Status', p.status], ['Indexability', p.indexability], ['Indexability Status', p.indexabilityReason], ['Title 1', p.title], ['Title 1 Length', p.titleLength], ['Title 1 Pixel Width', p.titlePixelWidth], ['Meta Description 1', p.metaDescription], ['Meta Description 1 Length', p.metaDescriptionLength], ['Meta Description 1 Pixel Width', p.metaDescriptionPixelWidth], ['H1-1', (p.h1s || [])[0] || ''], ['H1-2', (p.h1s || [])[1] || ''], ['H2-1', (p.h2s || [])[0] || ''], ['H2-2', (p.h2s || [])[1] || ''], ['Meta Robots 1', p.metaRobots], ['X-Robots-Tag 1', p.xRobotsTag], ['Canonical Link Element 1', p.canonical], ['rel="next" 1', (p.pagination || {}).next || ''], ['rel="prev" 1', (p.pagination || {}).prev || ''], ['Size (bytes)', p.sizeBytes], ['Word Count', p.wordCount], ['Sentence Count', p.sentenceCount], ['Average Words Per Sentence', p.avgWordsPerSentence], ['Flesch Reading Ease Score', p.flesch], ['Readability', p.readability], ['Text Ratio', p.textRatio], ['Crawl Depth', p.depth], ['Link Score', p.linkScore], ['Inlinks', p.inlinks], ['Unique Inlinks', p.uniqueInlinks], ['Outlinks', p.outlinks], ['Unique Outlinks', p.uniqueOutlinks], ['External Outlinks', p.externalOutlinks], ['Response Time', typeof p.responseTimeMs === 'number' ? Math.round(p.responseTimeMs) / 1000 : ''], ['Redirect URL', p.redirectUrl], ['Redirect Type', p.redirectType], ['In Sitemap', p.inSitemap ? 'Yes' : 'No'], ['Hash', p.hash], ['Near Duplicate Of', p.nearDuplicateOf || ''], ['Spelling Errors', p.spellingErrors ?? 0], ['Grammar Errors', p.grammarErrors ?? 0], ['Accessibility Violations', p.a11yViolations ?? ''], ['Language', p.htmlLang || ''], ['Issues', (p.issues || []).join('; ')]];
+    const rows = kv.filter(([k, v]) => !state.bottomSearch || `${k} ${v}`.toLowerCase().includes(state.bottomSearch.toLowerCase()));
+    body.innerHTML = `<div class="bt-toolbar"><button data-bexport>Export</button>${searchBox}</div>` + '<table class="kv"><tr><th>Name</th><th>Value</th></tr>' + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>';
+  } else if (bt === 'inlinks' || bt === 'outlinks') {
+    let rows = [];
+    if (bt === 'inlinks') { for (const q of pages) for (const l of q.links || []) if (l.url === p.address) rows.push({ type: 'Hyperlink', from: q.address, to: p.address, anchor: l.anchor, alt: l.alt || '', follow: l.follow, rel: l.rel || '', target: l.target || '', position: l.position || 'Content' }); }
+    else rows = (p.links || []).map((l) => ({ type: 'Hyperlink', from: p.address, to: l.url, anchor: l.anchor, alt: l.alt || '', follow: l.follow, rel: l.rel || '', target: l.target || '', position: l.position || 'Content', status: (pages.find((x) => x.address === l.url) || {}).statusCode ?? '' }));
+    const shown = filterLinkRows(rows);
+    body.innerHTML = `<div class="bt-toolbar">${linkFilterBar(rows)}<button data-bexport>Export</button>${searchBox}<span class="hint">${shown.length} of ${rows.length}</span></div>` +
+      (rows.length ? `<table><tr><th>Type</th><th>From</th><th>To</th><th>Anchor Text</th><th>Alt Text</th><th>Follow</th><th>Target</th><th>Rel</th>${bt === 'outlinks' ? '<th>Status Code</th>' : ''}<th>Link Position</th></tr>` + shown.map((r) => `<tr><td>${r.type}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.anchor)}</td><td>${esc(r.alt)}</td><td>${r.follow ? 'True' : 'False'}</td><td>${esc(r.target)}</td><td>${esc(r.rel)}</td>${bt === 'outlinks' ? `<td>${esc(r.status)}</td>` : ''}<td>${esc(r.position)}</td></tr>`).join('') + '</table>' : `<div class="empty-big">No ${bt === 'inlinks' ? 'inlinks' : 'outlinks'} in this crawl</div>`);
+  } else if (bt === 'images') {
     const imgs = p.images || [];
     const sel = state.selectedImage;
-    const preview = sel ? `<img src="${esc(sel.address)}" style="max-width:${(state.zoom || 50) * 4}px;max-height:220px">` : '<div class="img-placeholder"><svg viewBox="0 0 60 45" width="60" height="45"><rect x="2" y="2" width="56" height="41" fill="none" stroke="#39424d" stroke-width="2"/><circle cx="18" cy="15" r="5" fill="#39424d"/><path d="M4 40 L22 24 L34 34 L44 26 L56 38 L56 43 L4 43 Z" fill="#39424d"/></svg><p>No Image selected</p></div>';
-    body.innerHTML = `<div class="images-split"><div class="images-left">` +
-      (imgs.length ? '<table><tr><th>From</th><th>To</th></tr>' + imgs.map((im, i) => `<tr data-imgrow="${i}"><td>${esc(p.address)}</td><td>${esc(im.url)}</td></tr>`).join('') + '</table>' : 'No Image Info found') +
-      `</div><div class="images-right"><div class="bt-toolbar"><button data-bexport>Export</button><input type="text" placeholder="Search..."><label>Zoom: <select id="zoom-sel"><option ${state.zoom === 25 ? 'selected' : ''}>25%</option><option ${!state.zoom || state.zoom === 50 ? 'selected' : ''}>50%</option><option ${state.zoom === 100 ? 'selected' : ''}>100%</option><option ${state.zoom === 200 ? 'selected' : ''}>200%</option></select></label></div>${preview}</div></div>`;
+    const preview = sel ? `<img src="${esc(sel.address)}" style="max-width:${(state.zoom || 50) * 4}px;max-height:240px">` : '<div class="img-placeholder"><svg viewBox="0 0 60 45" width="80" height="60"><rect x="2" y="2" width="56" height="41" rx="3" fill="none" stroke="#5a636d" stroke-width="3"/><circle cx="18" cy="15" r="5" fill="#5a636d"/><path d="M4 40 L22 24 L34 34 L44 26 L56 38 L56 43 L4 43 Z" fill="#5a636d"/></svg><p>No Image selected</p></div>';
+    const meta = sel && sel._img ? kvTable([['Image', sel.address], ['Alt Text', sel._img.alt ?? '(missing alt attribute)'], ['Size', sel._img.size ? Math.round(sel._img.size / 102.4) / 10 + ' KB' : ''], ['Dimensions (Attributes)', sel._img.width || sel._img.height ? `${sel._img.width || '?'} x ${sel._img.height || '?'}` : 'Missing'], ['Real Dimensions', sel._img.naturalWidth ? `${sel._img.naturalWidth} x ${sel._img.naturalHeight}` : '']]) : '';
+    body.innerHTML = `<div class="images-split"><div class="images-left"><div class="bt-toolbar"><button data-bexport>Export</button></div>` +
+      (imgs.length ? '<table><tr><th>From</th><th>To</th><th>Alt Text</th></tr>' + imgs.map((im, i) => `<tr data-imgrow="${i}" class="${sel && sel.address === im.url ? 'selected' : ''}"><td>${esc(p.address)}</td><td>${esc(im.url)}</td><td>${esc(im.alt ?? '')}</td></tr>`).join('') + '</table>' : '<div class="empty-big">No Image Info found</div>') +
+      `</div><div class="images-right"><div class="bt-toolbar"><button data-zoom="-1" title="Zoom out">-</button><button data-zoom="1" title="Zoom in">+</button><span>Zoom: ${state.zoom || 50}%</span></div>${preview}${meta}</div></div>`;
     document.querySelectorAll('[data-imgrow]').forEach((tr) => tr.addEventListener('click', () => { const im = imgs[Number(tr.dataset.imgrow)]; state.selectedImage = { address: im.url, _img: im }; renderBottom(); }));
-    const zs = $('#zoom-sel'); if (zs) zs.addEventListener('change', () => { state.zoom = Number(zs.value.replace('%', '')); renderBottom(); });
-  } else if (state.btab === 'resources') {
-    body.innerHTML = (p.resources || []).length ? '<table><tr><th>Resource URL</th><th>Type</th></tr>' + p.resources.map((r) => `<tr><td>${esc(r.url)}</td><td>${esc(r.type)}</td></tr>`).join('') + '</table>' : 'No resources collected for this page.';
-  } else if (state.btab === 'headers') {
-    const h = Object.entries(p.headers || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
-    const ck = (p.cookies || []).map((c) => `<tr><td>set-cookie</td><td>${esc(c)}</td></tr>`).join('');
-    body.innerHTML = '<table class="kv">' + h + ck + '</table>' + ((p.redirectChain || []).length ? '<p>Redirect chain: ' + p.redirectChain.map((x) => `${esc(x.from)} -[${x.status}]-&gt; `).join('') + esc(p.redirectUrl || '') + '</p>' : '');
-  } else if (state.btab === 'rendered') {
+    document.querySelectorAll('[data-zoom]').forEach((b) => b.addEventListener('click', () => { const z = state.zoom || 50; const steps = [25, 50, 75, 100, 150, 200]; const k = Math.max(0, Math.min(steps.length - 1, steps.indexOf(z) + Number(b.dataset.zoom))); state.zoom = steps[k]; renderBottom(); }));
+  } else if (bt === 'resources') {
+    const rows = (p.resources || []).filter((r) => !state.bottomSearch || r.url.toLowerCase().includes(state.bottomSearch.toLowerCase()));
+    body.innerHTML = `<div class="bt-toolbar"><button data-bexport>Export</button>${searchBox}</div>` + (rows.length ? '<table><tr><th>Type</th><th>From</th><th>To</th><th>Status Code</th></tr>' + rows.map((r) => `<tr><td>${esc(r.type)}</td><td>${esc(p.address)}</td><td>${esc(r.url)}</td><td>${esc((pages.find((x) => x.address === r.url) || {}).statusCode ?? '')}</td></tr>`).join('') + '</table>' : '<div class="empty-big">No resources collected for this page</div>');
+  } else if (bt === 'serp') {
+    body.innerHTML = serpSnippet(p) + kvTable([['Title', p.title || ''], ['Title Length', `${p.titleLength ?? 0} characters (max 60)`], ['Title Pixel Width', `${p.titlePixelWidth ?? 0} px (max 580)`], ['Title Truncated', (p.titlePixelWidth || 0) > 580 ? 'Yes' : 'No'], ['Description', p.metaDescription || ''], ['Description Length', `${p.metaDescriptionLength ?? 0} characters (max 155)`], ['Description Pixel Width', `${p.metaDescriptionPixelWidth ?? 0} px (max 985)`], ['Description Truncated', (p.metaDescriptionPixelWidth || 0) > 985 ? 'Yes' : 'No']]);
+  } else if (bt === 'rendered') {
     if (p.renderedTitle !== undefined || p.renderedCanonical !== undefined) {
-      body.innerHTML = '<table class="kv">' + [['Raw Title', p.rawTitle || p.title || ''], ['Rendered Title', p.renderedTitle || ''], ['Raw Canonical', p.canonical || ''], ['Rendered Canonical', p.renderedCanonical || ''], ['Raw Meta Description', p.metaDescription || ''], ['Rendered Meta Description', p.renderedMetaDescription || ''], ['Raw H1', (p.h1s || [])[0] || ''], ['Rendered H1', p.renderedH1 || ''], ['Blocked Resources', (p.blockedResources || []).join(', ')], ['JS Errors', (p.jsErrors || []).join('; ')]].map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('') + '</table>';
+      body.innerHTML = kvTable([['Raw Title', p.rawTitle || p.title || ''], ['Rendered Title', p.renderedTitle || ''], ['Raw Canonical', p.canonical || ''], ['Rendered Canonical', p.renderedCanonical || ''], ['Raw Meta Description', p.metaDescription || ''], ['Rendered Meta Description', p.renderedMetaDescription || ''], ['Raw H1', (p.h1s || [])[0] || ''], ['Rendered H1', p.renderedH1 || ''], ['Raw Links', (p.links || []).length], ['Rendered Links', p.renderedLinkCount ?? ''], ['Blocked Resources', (p.blockedResources || []).join(', ')]]);
     } else {
-      body.innerHTML = '<p class="hint">JavaScript rendering is off for this crawl, so rendered fields come from the raw HTML only.</p><div class="rendered-text">' + esc((p.textExcerpt || '').slice(0, 1500)) + '</div>';
+      body.innerHTML = '<p class="hint">JavaScript rendering is off for this crawl (Configuration &gt; Spider &gt; Rendering). Showing the text extracted from the raw HTML.</p><div class="rendered-text">' + esc((p.textExcerpt || '').slice(0, 3000)) + '</div>';
     }
-  } else if (state.btab === 'serp') {
-    body.innerHTML = serpSnippet(p);
+  } else if (bt === 'console') {
+    const msgs = [...(p.jsErrors || []).map((m) => ['Error', m]), ...(p.jsWarnings || []).map((m) => ['Warning', m])];
+    body.innerHTML = msgs.length ? '<table><tr><th>Level</th><th>Message</th></tr>' + msgs.map(([l, m]) => `<tr><td>${l}</td><td>${esc(m)}</td></tr>`).join('') + '</table>'
+      : `<div class="empty-big">${p.renderedTitle !== undefined ? 'No console messages' : 'Turn on JavaScript rendering (Configuration &gt; Spider &gt; Rendering) to capture the Chrome console log'}</div>`;
+  } else if (bt === 'source') {
+    body.innerHTML = p.rawHtml ? `<div class="bt-toolbar"><button data-bexport>Export</button><span class="hint">${p.rawHtml.length.toLocaleString()} characters</span></div><pre class="source">${esc(p.rawHtml)}</pre>`
+      : '<div class="empty-big">HTML was not stored for this crawl. Turn on Configuration &gt; Spider &gt; Extraction &gt; Store HTML and crawl again.</div>';
+  } else if (bt === 'headers') {
+    const h = Object.entries(p.headers || {});
+    body.innerHTML = h.length ? '<table class="kv"><tr><th>Header Name</th><th>Header Value</th></tr>' + h.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('') + '</table>' + ((p.redirectChain || []).length ? '<h4>Redirect Chain</h4><table><tr><th>From</th><th>To</th><th>Status</th></tr>' + p.redirectChain.map((x) => `<tr><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.status)}</td></tr>`).join('') + '</table>' : '') : '<div class="empty-big">No HTTP headers recorded</div>';
+  } else if (bt === 'cookies') {
+    const ck = (p.cookies || []).map((c) => { const parts = String(c).split(';').map((x) => x.trim()); const [name, ...val] = parts[0].split('='); const attr = (k) => (parts.find((x) => x.toLowerCase().startsWith(k)) || '').split('=').slice(1).join('=') || (parts.some((x) => x.toLowerCase() === k) ? 'Yes' : ''); return { name, value: val.join('='), domain: attr('domain'), path: attr('path'), expires: attr('expires') || attr('max-age'), secure: attr('secure') || 'No', httpOnly: attr('httponly') || 'No', sameSite: attr('samesite') }; });
+    body.innerHTML = ck.length ? '<table><tr><th>Name</th><th>Value</th><th>Domain</th><th>Path</th><th>Expiry</th><th>Secure</th><th>HttpOnly</th><th>SameSite</th></tr>' + ck.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.value.slice(0, 60))}</td><td>${esc(c.domain)}</td><td>${esc(c.path)}</td><td>${esc(c.expires)}</td><td>${esc(c.secure)}</td><td>${esc(c.httpOnly)}</td><td>${esc(c.sameSite)}</td></tr>`).join('') + '</table>' : '<div class="empty-big">No cookies set by this URL</div>';
+  } else if (bt === 'duplicates') {
+    const exact = p.hash ? pages.filter((q) => q !== p && q.hash === p.hash && (q.wordCount || 0) > 0) : [];
+    const near = p.simhash ? pages.filter((q) => q !== p && q.simhash && q.hash !== p.hash && (q.wordCount || 0) >= 30).map((q) => ({ q, sim: simhashSim(p.simhash, q.simhash) })).filter((x) => x.sim >= ((state.config || {}).duplicatesThreshold || 0.92)).sort((a, b) => b.sim - a.sim) : [];
+    body.innerHTML = (exact.length || near.length) ? '<table><tr><th>Address</th><th>Match</th><th>Similarity</th><th>Word Count</th></tr>' + exact.map((q) => `<tr><td>${esc(q.address)}</td><td>Exact Duplicate</td><td>100%</td><td>${q.wordCount ?? ''}</td></tr>`).join('') + near.map(({ q, sim }) => `<tr><td>${esc(q.address)}</td><td>Near Duplicate</td><td>${Math.round(sim * 100)}%</td><td>${q.wordCount ?? ''}</td></tr>`).join('') + '</table>' : '<div class="empty-big">No exact or near duplicates found for this URL</div>';
+  } else if (bt === 'structured') {
+    const items = p.sdItems || [];
+    body.innerHTML = items.length ? '<table><tr><th>Format</th><th>Type</th><th>Properties</th></tr>' + items.map((it) => `<tr><td>${it.microdata ? 'Microdata' : 'JSON-LD'}</td><td>${esc(it.type)}</td><td>${esc((it.keys || []).filter((k) => !k.startsWith('@')).join(', '))}</td></tr>`).join('') + '</table>' + ((p.sdWarnings || []).length ? '<h4>Validation Warnings</h4><ul>' + p.sdWarnings.map((w) => `<li>${esc(w)}</li>`).join('') + '</ul>' : '') : '<div class="empty-big">No structured data found on this URL</div>';
+  } else if (bt === 'spelling') {
+    const sp = (p.spellingUnknown || []).map((w) => ['Spelling', w, 'Not in dictionary']);
+    const gr = (p.grammarMatches || []).map((m) => ['Grammar', m.text, m.rule]);
+    const rows = [...sp, ...gr];
+    body.innerHTML = rows.length ? `<p class="hint">${p.spellingErrors || 0} spelling and ${p.grammarErrors || 0} grammar issues. Language: ${esc(p.htmlLang || 'not declared')}</p><table><tr><th>Type</th><th>Text</th><th>Reason</th></tr>` + rows.map(([t, x, r]) => `<tr><td>${t}</td><td>${esc(x)}</td><td>${esc(r)}</td></tr>`).join('') + '</table>' : '<div class="empty-big">No spelling or grammar issues found</div>';
+  } else if (bt === 'a11y') {
+    const a = p.a11y || {};
+    const defs = state.a11yDefs || [];
+    const rows = Object.entries(a).filter(([, v]) => v.count > 0);
+    body.innerHTML = p.a11y ? (rows.length ? '<table><tr><th>Violation</th><th>WCAG</th><th>Count</th><th>Examples</th></tr>' + rows.map(([id, v]) => { const d = defs.find((x) => x.id === id) || { name: id, wcag: '' }; return `<tr><td>${esc(d.name)}</td><td>${esc(d.wcag)}</td><td>${v.count}</td><td>${(v.samples || []).map((x) => `<code>${esc(x)}</code>`).join('<br>')}</td></tr>`; }).join('') + '</table>' : '<div class="empty-big">No accessibility violations found by the static checks</div>') : '<div class="empty-big">Accessibility checks run on HTML pages only</div>';
   }
   const be = body.querySelector('[data-bexport]');
-  if (be) be.addEventListener('click', () => window.spider.saveText({ defaultPath: 'url-details.txt', content: body.innerText }));
+  if (be) be.addEventListener('click', () => window.spider.saveText({ defaultPath: `${bt}-${(p.address || 'url').replace(/[^a-z0-9]+/gi, '-').slice(0, 60)}.txt`, content: bt === 'source' ? (p.rawHtml || '') : body.innerText }));
   const bs = body.querySelector('[data-bsearch]');
   if (bs) bs.addEventListener('input', () => { state.bottomSearch = bs.value; renderBottom(); const nbs = $('#bottom-body [data-bsearch]'); if (nbs) { nbs.focus(); nbs.setSelectionRange(nbs.value.length, nbs.value.length); } });
+  const lt = body.querySelector('[data-ltype]'); if (lt) lt.addEventListener('change', () => { state.linkTypeFilter = lt.value; renderBottom(); });
+  const lp = body.querySelector('[data-lpos]'); if (lp) lp.addEventListener('change', () => { state.linkPosFilter = lp.value; renderBottom(); });
 }
 
 /* ---------- right sidebar ---------- */
@@ -252,18 +300,54 @@ function donutSvg(entries, size = 190) {
   const legend = entries.filter((e) => e.value > 0).map((e, i) => `<div class="legend-row"><span class="swatch" style="background:${CHART_COLORS[i % CHART_COLORS.length]}"></span>${esc(e.label)} (${e.value})</div>`).join('');
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg><div class="legend">${legend}</div>`;
 }
-function barSvg(entries, width = 330) {
-  const rows = entries.filter((e) => e.value > 0);
-  if (!rows.length) return '<p class="chart-none">No data for graph.</p>';
-  const max = Math.max(1, ...rows.map((e) => e.value));
-  const labelW = 118, valW = 30, barW = width - labelW - valW, rowH = 17;
-  const rects = rows.map((e, i) => {
-    const w = Math.max(1, Math.round((e.value / max) * barW));
-    const y = i * rowH;
-    const label = e.label.length > 19 ? e.label.slice(0, 18) + '…' : e.label;
-    return `<text x="0" y="${y + 11}">${esc(label)}</text><rect x="${labelW}" y="${y + 2}" width="${w}" height="11" fill="${CHART_COLORS[i % CHART_COLORS.length]}"><title>${esc(e.label)}: ${e.value}</title></rect><text x="${labelW + w + 5}" y="${y + 11}">${e.value}</text>`;
-  }).join('');
-  return `<svg width="${width}" height="${rows.length * rowH + 2}" viewBox="0 0 ${width} ${rows.length * rowH + 2}">${rects}</svg>`;
+function niceStep(max) { const raw = max / 5; const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-9)))); const n = raw / mag; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag; }
+/* Screaming Frog style vertical bar chart: "URLs" y-axis with gridlines,
+ * green bars, x labels rotated to read top-to-bottom. */
+function barSvg(entries, width = 340) {
+  const rows = entries;
+  if (!rows.length || !rows.some((e) => e.value > 0)) return '<p class="chart-none">No data for graph.</p>';
+  const maxV = Math.max(1, ...rows.map((e) => e.value));
+  const step = niceStep(maxV); const top = Math.ceil(maxV / step) * step || 1;
+  const labelLen = Math.min(26, Math.max(...rows.map((e) => e.label.length)));
+  const left = 46, right = 8, topPad = 10, plotH = 150, labelH = Math.max(40, labelLen * 6 + 8);
+  const plotW = width - left - right; const slot = plotW / rows.length; const bw = Math.max(4, Math.min(34, slot * 0.7));
+  let g = '';
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    const y = topPad + plotH - (v / top) * plotH;
+    g += `<line x1="${left}" x2="${width - right}" y1="${y}" y2="${y}" class="grid-line"/><text x="${left - 5}" y="${y + 3}" text-anchor="end" class="axis-text">${Number.isInteger(step) ? v : v.toFixed(1)}</text>`;
+  }
+  rows.forEach((e, i) => {
+    const h = (e.value / top) * plotH; const x = left + i * slot + (slot - bw) / 2; const y = topPad + plotH - h;
+    const lx = left + i * slot + slot / 2; const label = e.label.length > 26 ? e.label.slice(0, 25) + '…' : e.label;
+    g += `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(0, h)}" fill="#00C852"><title>${esc(e.label)}: ${e.value}</title></rect>`;
+    g += `<text transform="translate(${lx - 3},${topPad + plotH + 6}) rotate(90)" class="axis-text">${esc(label)}</text>`;
+  });
+  g += `<text transform="translate(12,${topPad + plotH / 2}) rotate(-90)" text-anchor="middle" class="axis-title">URLs</text>`;
+  return `<svg class="vbar" width="${width}" height="${topPad + plotH + labelH}" viewBox="0 0 ${width} ${topPad + plotH + labelH}">${g}</svg>`;
+}
+/* Which Overview section belongs to a main tab (so clicking any tab opens
+ * its section in the right-hand Overview, like Screaming Frog). */
+function sectionForTab(tabId) {
+  if (tabId === 'internal') return 'Crawl Data Internal';
+  if (tabId === 'external') return 'Crawl Data External';
+  const f = state.filterMeta.find((m) => m.tab === tabId);
+  return f ? f.section : null;
+}
+function focusSidebarOnTab(tabId) {
+  const sec = sectionForTab(tabId);
+  if (!sec) return;
+  state.stab = 'overview'; state.sideSection = sec;
+  const first = state.filterMeta.find((m) => m.section === sec);
+  state.sideFilter = first ? first.id : null;
+  if (state.collapsed.has(sec)) { state.collapsed.delete(sec); lsSet('collapsedSections', [...state.collapsed]); }
+  state.scrollToSection = sec;
+}
+function scrollSidebarToSection() {
+  const sec = state.scrollToSection; if (!sec) return;
+  state.scrollToSection = null;
+  const body = $('#side-body');
+  const row = [...body.querySelectorAll('tr.section-row')].find((r) => r.dataset.section === sec);
+  if (row) body.scrollTop += row.getBoundingClientRect().top - body.getBoundingClientRect().top - 24;
 }
 function sectionFilters(section) { return state.filterMeta.filter((f) => f.section === section); }
 function filterCount(id) { const cr = state.crawl; if (!cr) return 0; return cr.pages.filter((p) => (p.filters || []).includes(id)).length; }
@@ -283,24 +367,35 @@ function renderSidebar() {
 function renderOverviewSide(body, cr) {
   if (!cr) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; setChart(null); return; }
   const total = cr.pages.length || 1;
-  const pct = (n) => Math.round((n / total) * 1000) / 10;
-  let html = '<table class="side-table"><tr><th></th><th>URLs</th><th>% of Total</th></tr>';
-  html += '<tr class="section-row"><td colspan="3">Summary</td></tr>';
-  for (const row of (cr.analysis ? cr.analysis.summary : [])) html += `<tr><td>${esc(row.label)}</td><td>${row.count}</td><td>${pct(row.count)}%</td></tr>`;
+  const pctOf = (n, base) => (base ? Math.round((n / base) * 10000) / 100 : 0);
+  let html = '<table class="side-table overview"><tr><th></th><th class="num">URLs</th><th class="num">% of Total</th></tr>';
+  const sumCollapsed = state.collapsed.has('Summary');
+  html += `<tr class="section-row" data-section="Summary"><td colspan="3"><span class="collapse-arrow">${sumCollapsed ? '&#9654;' : '&#9660;'}</span> Summary</td></tr>`;
+  if (!sumCollapsed) for (const row of (cr.analysis ? cr.analysis.summary : [])) html += `<tr><td class="ind1">${esc(row.label)}</td><td class="num">${row.count}</td><td class="num">${pctOf(row.count, total)}%</td></tr>`;
   const sections = [...new Set(state.filterMeta.map((f) => f.section))];
   for (const section of sections) {
     const filters = sectionFilters(section);
-    html += `<tr class="section-row"><td colspan="3"><span class="collapse-arrow">&#9660;</span> ${esc(section)}</td></tr>`;
+    const closed = state.collapsed.has(section);
+    html += `<tr class="section-row" data-section="${esc(section)}"><td colspan="3"><span class="collapse-arrow">${closed ? '&#9654;' : '&#9660;'}</span> ${esc(section)}</td></tr>`;
+    if (closed) continue;
+    const base = filters.length && filters[0].name === 'All' ? filterCount(filters[0].id) : total;
     for (const f of filters) {
       const n = filterCount(f.id);
-      html += `<tr class="filter-row ${state.sideFilter === f.id ? 'selected' : ''}" data-filter="${esc(f.id)}" data-section="${esc(section)}"><td>${esc(f.name)}</td><td>${n}</td><td>${pct(n)}%</td></tr>`;
+      html += `<tr class="filter-row ${state.sideFilter === f.id ? 'selected' : ''}" data-filter="${esc(f.id)}" data-section="${esc(section)}"><td class="ind1">${esc(f.name)}</td><td class="num">${n}</td><td class="num">${pctOf(n, base)}%</td></tr>`;
     }
   }
   body.innerHTML = html + '</table>';
+  body.querySelectorAll('.section-row').forEach((tr) => tr.addEventListener('click', () => {
+    const sec = tr.dataset.section;
+    if (state.collapsed.has(sec)) state.collapsed.delete(sec); else state.collapsed.add(sec);
+    lsSet('collapsedSections', [...state.collapsed]);
+    renderSidebar();
+  }));
   body.querySelectorAll('.filter-row').forEach((tr) => tr.addEventListener('click', () => {
     const meta = state.filterMeta.find((f) => f.id === tr.dataset.filter);
     state.sideFilter = tr.dataset.filter; state.sideSection = tr.dataset.section;
-    state.tab = meta ? meta.tab : 'internal'; state.filterId = tr.dataset.filter; state.issueName = null;
+    state.tab = meta ? meta.tab : 'internal'; state.filterId = meta && meta.name === 'All' && (meta.tab === 'internal' || meta.tab === 'external') ? 'all' : tr.dataset.filter; state.issueName = null;
+    if (!state.visibleTabs.includes(state.tab)) { state.visibleTabs.push(state.tab); lsSet('visibleTabs', state.visibleTabs); }
     renderAll();
   }));
   updateChart();
@@ -319,38 +414,53 @@ function updateChart() {
   const entries = filters.map((f) => ({ label: f.name, value: filterCount(f.id) }));
   const useDonut = section.startsWith('Crawl Data') || section === 'Response Codes';
   const hasData = entries.some((e) => e.value > 0);
-  setChart(section, hasData ? (useDonut ? donutSvg(entries.slice(0, 10)) : barSvg(entries.slice(0, 14))) : '<p class="chart-none">No data for graph.</p>');
+  const title = section.startsWith('Crawl Data') ? section.replace('Crawl Data ', '') : section;
+  setChart(title, hasData ? (useDonut ? donutSvg(entries.slice(0, 10)) : barSvg(entries.slice(0, 24))) : '<p class="chart-none">No data for graph.</p>');
+}
+const ISSUE_ICONS = {
+  Issue: '<svg class="ico" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.5" fill="#D64541"/><rect x="6.2" y="3" width="1.6" height="5.2" fill="#fff"/><rect x="6.2" y="9.4" width="1.6" height="1.6" fill="#fff"/></svg>',
+  Warning: '<svg class="ico" viewBox="0 0 14 14"><path d="M7 .8 13.6 13H.4z" fill="#F5A623"/><rect x="6.3" y="4.8" width="1.4" height="4.4" fill="#222"/><rect x="6.3" y="10.2" width="1.4" height="1.4" fill="#222"/></svg>',
+  Opportunity: '<svg class="ico" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.5" fill="#4A90D9"/><rect x="6.2" y="6" width="1.6" height="5" fill="#fff"/><rect x="6.2" y="3.2" width="1.6" height="1.6" fill="#fff"/></svg>',
+};
+const PRIORITY_ICONS = {
+  High: '<svg class="ico" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.8" fill="none" stroke="#D64541" stroke-width="1.6"/><path d="M7 3.6 10 7.4H8v3H6v-3H4z" fill="#D64541"/></svg>',
+  Medium: '<svg class="ico" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.6" fill="none" stroke="#F5A623" stroke-width="1.8"/></svg>',
+  Low: '<svg class="ico" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.8" fill="none" stroke="#4A90D9" stroke-width="1.6"/><path d="M7 10.4 4 6.6h2v-3h2v3h2z" fill="#4A90D9"/></svg>',
+};
+function issueDetailsHtml(iss) {
+  if (!iss) return '<div class="issue-details"><div class="issue-detail-head"><button id="issue-copy" disabled>Copy</button><b>Issue Details</b><label>View: <select id="issue-view"><option>Details</option></select></label></div><p class="empty-state">No Issue Selected</p></div>';
+  return `<div class="issue-details"><div class="issue-detail-head"><button id="issue-copy">Copy</button><b>Issue Details</b><label>View: <select id="issue-view"><option>Details</option></select></label></div>
+    <div class="issue-detail-body"><h3>Description</h3><p>${esc(iss.description || '')}</p><h3>How To Fix</h3><p>${esc(iss.howToFix || 'No specific fix guidance for this issue.')}</p>
+    <p class="hint">${ISSUE_ICONS[iss.type] || ''} ${esc(iss.type)} &nbsp; ${PRIORITY_ICONS[iss.priority] || ''} ${esc(iss.priority)} priority &nbsp; ${iss.count} URLs (${iss.pct}%)</p></div></div>`;
+}
+function selectIssue(cr, id) {
+  const iss = cr.issues.find((i) => i.id === id);
+  if (!iss) return;
+  state.selectedIssue = iss.id;
+  if (iss.filterId) {
+    const meta = state.filterMeta.find((f) => f.id === iss.filterId);
+    state.tab = meta ? meta.tab : 'internal'; state.filterId = iss.filterId; state.issueName = null;
+    if (!state.visibleTabs.includes(state.tab)) { state.visibleTabs.push(state.tab); lsSet('visibleTabs', state.visibleTabs); }
+  } else { state.tab = 'internal'; state.filterId = 'all'; state.issueName = iss.name; }
+  renderAll();
 }
 function renderIssuesSide(body, cr) {
-  if (!cr) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; return; }
+  if (!cr) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; setChart('', issueDetailsHtml(null)); return; }
   const counts = { Issue: 0, Warning: 0, Opportunity: 0 };
   for (const i of cr.issues) counts[i.type] = (counts[i.type] || 0) + 1;
-  const totalIssues = cr.issues.length;
-  const chips = [['Issue', counts.Issue, 'Issues'], ['Warning', counts.Warning, 'Warnings'], ['Opportunity', counts.Opportunity, 'Opportunities'], ['Total', totalIssues, 'Total']];
+  const chips = [['Issue', counts.Issue, 'Issues'], ['Warning', counts.Warning, 'Warnings'], ['Opportunity', counts.Opportunity, 'Opportunities'], ['Total', cr.issues.length, 'Total']];
   let list = cr.issues;
   if (state.issueChip !== 'Total') list = list.filter((i) => i.type === state.issueChip);
-  const marker = { Issue: '#D64541', Warning: '#F5A623', Opportunity: '#7FB3D5' };
-  const dot = { High: '#D64541', Medium: '#F5A623', Low: '#9AA0A6' };
-  body.innerHTML = `<div class="bt-toolbar"><button id="issues-export">Export</button></div>
-  <div class="chips">${chips.map(([key, n, label]) => `<button class="chip ${(state.issueChip === key || (key === 'Total' && state.issueChip === 'Total')) ? 'active' : ''}" data-chip="${key}">${label}: ${n}</button>`).join('')}</div>
-  <table class="side-table"><tr><th>Issue Name</th><th>Issue Type</th><th>Issue Priority</th><th>URLs</th><th>% of Total</th></tr>
-  ${list.map((i) => `<tr class="issue-trow ${state.selectedIssue === i.id ? 'selected' : ''}" data-issueid="${esc(i.id)}"><td><span class="marker" style="background:${marker[i.type]}"></span>${esc(i.name)}</td><td>${esc(i.type)}</td><td><span class="dot" style="background:${dot[i.priority]}"></span>${esc(i.priority)}</td><td>${i.count}</td><td>${i.pct}%</td></tr>`).join('') || '<tr><td colspan="5">No issues</td></tr>'}</table>
-  <div class="issue-details"><div class="bt-toolbar"><button id="issue-copy">Copy</button><label>View: <select><option>Details</option></select></label></div>
-  <div id="issue-detail-body">${state.selectedIssue ? esc((cr.issues.find((i) => i.id === state.selectedIssue) || {}).description || '') : 'No Issue Selected'}</div></div>`;
+  body.innerHTML = `<div class="issues-bar"><button id="issues-export">Export</button><span class="spacer"></span>${chips.map(([key, n, label]) => `<button class="chip ${state.issueChip === key ? 'active' : ''}" data-chip="${key}">${label}: ${n}</button>`).join('')}</div>
+  <table class="side-table issues-table"><tr><th>Issue Name</th><th>Issue Type</th><th>Issue Priority</th><th class="num">URLs</th><th class="num">% of Total</th></tr>
+  ${list.map((i) => `<tr class="issue-trow ${state.selectedIssue === i.id ? 'selected' : ''}" data-issueid="${esc(i.id)}"><td>${esc(i.name)}</td><td class="nowrap">${ISSUE_ICONS[i.type] || ''} ${esc(i.type)}</td><td class="nowrap">${PRIORITY_ICONS[i.priority] || ''} ${esc(i.priority)}</td><td class="num">${i.count}</td><td class="num">${i.pct}%</td></tr>`).join('') || '<tr><td colspan="5">No issues</td></tr>'}</table>`;
+  const sel = cr.issues.find((i) => i.id === state.selectedIssue);
+  setChart('', issueDetailsHtml(sel));
   body.querySelectorAll('[data-chip]').forEach((b) => b.addEventListener('click', () => { state.issueChip = b.dataset.chip; renderSidebar(); }));
-  body.querySelectorAll('.issue-trow').forEach((tr) => {
-    tr.addEventListener('click', () => { state.selectedIssue = tr.dataset.issueid; renderSidebar(); });
-    tr.addEventListener('dblclick', () => {
-      const iss = cr.issues.find((i) => i.id === tr.dataset.issueid);
-      if (!iss) return;
-      state.selectedIssue = iss.id;
-      if (iss.filterId) { const meta = state.filterMeta.find((f) => f.id === iss.filterId); state.tab = meta ? meta.tab : 'internal'; state.filterId = iss.filterId; state.issueName = null; }
-      else { state.tab = 'internal'; state.filterId = 'all'; state.issueName = iss.name; }
-      renderAll();
-    });
-  });
+  body.querySelectorAll('.issue-trow').forEach((tr) => tr.addEventListener('click', () => selectIssue(cr, tr.dataset.issueid)));
   const ex = $('#issues-export'); if (ex) ex.addEventListener('click', exportIssues);
-  const cp = $('#issue-copy'); if (cp) cp.addEventListener('click', () => { const iss = cr.issues.find((i) => i.id === state.selectedIssue); if (iss && navigator.clipboard) navigator.clipboard.writeText(`${iss.name} (${iss.type}/${iss.priority}) - ${iss.count} URLs (${iss.pct}%)\n${iss.description}`); });
+  const cp = $('#issue-copy');
+  if (cp && sel) cp.addEventListener('click', () => { const text = `${sel.name}\nType: ${sel.type} | Priority: ${sel.priority} | URLs: ${sel.count} (${sel.pct}%)\n\nDescription\n${sel.description}\n\nHow To Fix\n${sel.howToFix || ''}`; if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { cp.textContent = 'Copied'; setTimeout(() => { cp.textContent = 'Copy'; }, 1200); }); });
 }
 function renderStructureSide(body, cr) {
   if (!cr || !cr.analysis) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; return; }
@@ -401,6 +511,7 @@ function renderResponseTimesSide(body, cr) {
   <table class="side-table"><tr><th>Response Time (In Seconds)</th><th>URLs</th><th>% of Total</th></tr>
   ${rt.buckets.map((b) => `<tr><td>${esc(b.label)}</td><td>${b.count}</td><td>${b.pct}%</td></tr>`).join('')}</table>
   <div class="rt-chart">${barSvg(rt.buckets.map((b) => ({ label: b.label, value: b.count })))}</div>`;
+  setChart('Response Times', '');
 }
 function renderApiSide(body, cr) {
   if (!state.hasPsiKey) {
@@ -412,7 +523,11 @@ function renderApiSide(body, cr) {
   const btn = $('#psi-fetch');
   if (btn) btn.addEventListener('click', async () => {
     btn.disabled = true; btn.textContent = 'Fetching...';
-    try { state.psi = await window.spider.psiFetch(urls); } catch (e) { $('#psi-results').textContent = 'PageSpeed fetch failed: ' + e.message; }
+    try {
+      state.psi = await window.spider.psiFetch(urls);
+      const byUrl = new Map(state.psi.map((r) => [r.url, r]));
+      for (const p of (state.crawl ? state.crawl.pages : [])) { const r = byUrl.get(p.address); if (r && typeof r.score === 'number') { p.psiScore = r.score; p.psiLcp = r.lcp; p.psiCls = r.cls; p.psiTbt = r.tbt; p.filters = (p.filters || []).filter((f) => !f.startsWith('psi-')).concat(['psi-all', r.score >= 90 ? 'psi-good' : r.score >= 50 ? 'psi-ni' : 'psi-poor']); } }
+    } catch (e) { $('#psi-results').textContent = 'PageSpeed fetch failed: ' + e.message; }
     btn.disabled = false; btn.textContent = 'Fetch PageSpeed Insights';
     renderSidebar();
     if (state.tab === 'pagespeed') renderGrid();
@@ -428,24 +543,40 @@ function renderSpellingSide(body, cr) {
   body.innerHTML = `<table class="side-table"><tr><th>Measure</th><th>Count</th></tr>
   <tr><td>Pages With Spelling Errors</td><td>${sp.pagesWithErrors}</td></tr>
   <tr><td>Total Spelling Errors</td><td>${sp.totalErrors}</td></tr>
-  <tr><td>Grammar Errors</td><td>0</td></tr></table>
-  <p class="hint">Basic dictionary check only; grammar checking requires a language tool and is not performed.</p>
+  <tr><td>Pages With Grammar Errors</td><td>${cr.pages.filter((p) => (p.grammarErrors || 0) > 0).length}</td></tr>
+  <tr><td>Total Grammar Errors</td><td>${cr.pages.reduce((a, p) => a + (p.grammarErrors || 0), 0)}</td></tr></table>
+  <p class="hint">Dictionary spell check plus built-in grammar rules (repeated words, a/an, "could of", sentence case, missing spaces). Select a URL and open the Spelling &amp; Grammar tab in the bottom pane for details.</p>
   ${rows.length ? '<table class="side-table"><tr><th>URL</th><th>Errors</th></tr>' + rows.map((p) => `<tr><td>${esc(p.address)}</td><td>${p.spellingErrors}</td></tr>`).join('') + '</table>' : ''}`;
 }
 
 /* ---------- compare panel ---------- */
 function renderCompare() {
   const el = $('#compare-panel');
-  if (!state.compare) { el.innerHTML = '<h2>Crawl Comparison</h2><p>Run or open a crawl, then pick another saved crawl to compare against it.</p><button id="btn-compare-pick" class="primary">Pick Saved Crawl to Compare...</button>'; const b = $('#btn-compare-pick'); if (b) b.addEventListener('click', doCompare); return; }
+  if (!state.compare) { el.innerHTML = '<h2>Crawl Comparison</h2><p>Compare mode shows how every Overview filter changed between a previous crawl and the current one. Run or open the current crawl first, then pick the previous saved crawl.</p><button id="btn-compare-pick" class="primary">Pick Previous Crawl...</button>'; const b = $('#btn-compare-pick'); if (b) b.addEventListener('click', doCompare); return; }
   const d = state.compare.diff;
-  el.innerHTML = `<h2>Crawl Comparison</h2><p>Compared against: ${esc(state.compare.otherRoot || '')} (${esc(state.compare.otherAt || '')}). Direction: saved crawl -&gt; current crawl.</p>
-  <div class="cards"><div class="card"><div class="n">${d.added.length}</div><div class="l">New URLs</div></div><div class="card"><div class="n">${d.removed.length}</div><div class="l">Removed URLs</div></div><div class="card"><div class="n">${d.changed.length}</div><div class="l">Changed URLs</div></div></div>
-  <h3>Changed URLs</h3><table><tr><th>Address</th><th>Field</th><th>Before</th><th>After</th></tr>
-  ${d.changed.flatMap((c) => c.diffs.map((df) => `<tr><td>${esc(c.address)}</td><td>${esc(df.field)}</td><td>${esc(df.before)}</td><td>${esc(df.after)}</td></tr>`)).join('') || '<tr><td colspan="4">No changes</td></tr>'}</table>
-  <h3>Issue Deltas</h3><table><tr><th>Issue</th><th>Before</th><th>After</th><th>Delta</th></tr>
-  ${d.issueDeltas.map((i) => `<tr><td>${esc(i.name)}</td><td>${i.before}</td><td>${i.after}</td><td>${i.delta > 0 ? '+' : ''}${i.delta}</td></tr>`).join('')}</table>
-  <h3>New URLs</h3><p>${d.added.map(esc).join('<br>') || 'None'}</p>
-  <h3>Removed URLs</h3><p>${d.removed.map(esc).join('<br>') || 'None'}</p>`;
+  const fd = (d.filterDeltas || []).filter((f) => f.current || f.previous);
+  const secs = [...new Set(fd.map((f) => f.section))];
+  const cell = (f, key, list) => list.length ? `<td class="num link" data-cmp="${esc(f.id)}" data-kind="${key}">${list.length}</td>` : '<td class="num">0</td>';
+  let rows = '';
+  for (const sec of secs) {
+    rows += `<tr class="section-row"><td colspan="8">${esc(sec)}</td></tr>`;
+    for (const f of fd.filter((x) => x.section === sec)) {
+      const ch = f.current - f.previous;
+      rows += `<tr><td class="ind1">${esc(f.name)}</td><td class="num">${f.current}</td><td class="num">${f.previous}</td><td class="num ${ch > 0 ? 'up' : ch < 0 ? 'down' : ''}">${ch > 0 ? '+' : ''}${ch}</td>${cell(f, 'added', f.added)}${cell(f, 'newUrls', f.newUrls)}${cell(f, 'removed', f.removed)}${cell(f, 'missing', f.missing)}</tr>`;
+    }
+  }
+  const sel = state.compareSel;
+  const selF = sel && fd.find((f) => f.id === sel.id);
+  const label = { added: 'Added', newUrls: 'New', removed: 'Removed', missing: 'Missing' };
+  el.innerHTML = `<h2>Crawl Comparison</h2><p>Current crawl vs previous crawl: ${esc(state.compare.otherRoot || '')} (${esc(state.compare.otherAt || '')}).</p>
+  <div class="cards"><div class="card"><div class="n">${d.added.length}</div><div class="l">New URLs</div></div><div class="card"><div class="n">${d.removed.length}</div><div class="l">Missing URLs</div></div><div class="card"><div class="n">${d.changed.length}</div><div class="l">Changed URLs</div></div><button id="btn-compare-pick" class="secondary">Compare With Another Crawl...</button></div>
+  <p class="hint"><b>Added</b>: URL was in the previous crawl but not in this filter. <b>New</b>: URL was not in the previous crawl. <b>Removed</b>: URL is still crawled but left this filter. <b>Missing</b>: URL is no longer in the crawl. Click a number to list the URLs.</p>
+  <div class="cmp-split"><table class="cmp-table"><tr><th>Filter</th><th class="num">Current</th><th class="num">Previous</th><th class="num">Change</th><th class="num">Added</th><th class="num">New</th><th class="num">Removed</th><th class="num">Missing</th></tr>${rows || '<tr><td colspan="8">No filter data to compare.</td></tr>'}</table>
+  <div class="cmp-list">${selF ? `<h3>${esc(selF.section)} : ${esc(selF.name)} - ${label[sel.kind]} (${selF[sel.kind].length})</h3><ul>${selF[sel.kind].map((u) => `<li>${esc(u)}</li>`).join('')}</ul>` : '<p class="hint">Select a number to see its URLs.</p>'}</div></div>
+  <h3>Changed URLs</h3><table><tr><th>Address</th><th>Field</th><th>Previous</th><th>Current</th></tr>
+  ${d.changed.flatMap((c) => c.diffs.map((df) => `<tr><td>${esc(c.address)}</td><td>${esc(df.field)}</td><td>${esc(df.before)}</td><td>${esc(df.after)}</td></tr>`)).join('') || '<tr><td colspan="4">No changes</td></tr>'}</table>`;
+  el.querySelectorAll('[data-cmp]').forEach((td) => td.addEventListener('click', () => { state.compareSel = { id: td.dataset.cmp, kind: td.dataset.kind }; renderCompare(); }));
+  const b = $('#btn-compare-pick'); if (b) b.addEventListener('click', doCompare);
 }
 async function doCompare() {
   try { const r = await window.spider.crawlComparePick(); if (r) { state.compare = r; state.tab = 'compare'; renderAll(); } }
@@ -465,7 +596,7 @@ async function exportCurrentTab() {
 }
 async function exportIssues() {
   const cr = state.crawl; if (!cr) return;
-  const cols = [{ label: 'Issue Name', get: (i) => i.name }, { label: 'Issue Type', get: (i) => i.type }, { label: 'Issue Priority', get: (i) => i.priority }, { label: 'URLs', get: (i) => i.count }, { label: '% of Total', get: (i) => i.pct }, { label: 'Description', get: (i) => i.description }];
+  const cols = [{ label: 'Issue Name', get: (i) => i.name }, { label: 'Issue Type', get: (i) => i.type }, { label: 'Issue Priority', get: (i) => i.priority }, { label: 'URLs', get: (i) => i.count }, { label: '% of Total', get: (i) => i.pct }, { label: 'Description', get: (i) => i.description }, { label: 'How To Fix', get: (i) => i.howToFix || '' }]; 
   await window.spider.saveText({ defaultPath: 'seonfix-spider-issues.csv', content: toCsv(cr.issues, cols) });
 }
 const GEN_COLS = [{ label: 'Address', get: (p) => p.address }, { label: 'Content Type', get: (p) => p.contentType || p.contentCategory || '' }, { label: 'Status Code', get: (p) => p.statusCode ?? '' }, { label: 'Status', get: (p) => p.status || '' }, { label: 'Indexability', get: (p) => p.indexability || '' }, { label: 'Title 1', get: (p) => p.title || '' }, { label: 'Word Count', get: (p) => p.wordCount ?? '' }, { label: 'Inlinks', get: (p) => p.inlinks ?? 0 }, { label: 'Outlinks', get: (p) => p.outlinks ?? 0 }, { label: 'Crawl Depth', get: (p) => p.depth ?? '' }, { label: 'Link Score', get: (p) => p.linkScore ?? '' }];
@@ -507,9 +638,9 @@ const CFG_SECTIONS = [
   { id: 'include', label: 'Include' }, { id: 'exclude', label: 'Exclude' }, { id: 'speed', label: 'Speed' },
   { id: 'useragent', label: 'User-Agent' }, { id: 'httpheader', label: 'HTTP Header' },
   { id: 'customsearch', label: 'Custom > Custom Search' }, { id: 'customextraction', label: 'Custom > Custom Extraction' }, { id: 'customlinkpos', label: 'Custom > Custom Link Positions' },
-  { id: 'api-ga', label: 'API Access > Google Analytics' }, { id: 'api-gsc', label: 'API Access > Search Console' }, { id: 'api-psi', label: 'API Access > PageSpeed' },
+  { id: 'api-ga', label: 'API Access > Google Analytics' }, { id: 'api-gsc', label: 'API Access > Search Console' }, { id: 'api-psi', label: 'API Access > PageSpeed Insights' },
   { id: 'api-backlinks', label: 'API Access > Backlink APIs' }, { id: 'api-ai', label: 'API Access > AI' },
-  { id: 'auth-basic', label: 'Authentication > Basic' }, { id: 'auth-form', label: 'Authentication > Web Form' },
+  { id: 'auth-basic', label: 'Authentication > Standards Based' }, { id: 'auth-form', label: 'Authentication > Forms Based' },
   { id: 'segments', label: 'Segments' }, { id: 'analysis', label: 'Crawl Analysis' }, { id: 'profiles', label: 'Profiles' },
 ];
 let cfgSection = 'crawl';
@@ -526,15 +657,18 @@ function renderConfigPage() {
   const chk = (id, label, val) => `<label class="chk"><input type="checkbox" id="${id}" ${val ? 'checked' : ''}> ${label}</label>`;
   const linesOf = (arr) => (arr || []).join('\n');
   const pages = {
-    'crawl': () => n('cfg-concurrency', 'Threads / Concurrency', c.concurrency) + n('cfg-depth', 'Max Crawl Depth (0 = unlimited)', c.maxDepth) + n('cfg-maxurls', 'Max URLs', c.maxUrls) + chk('cfg-external', 'Status-check External URLs (fetched once, never followed)', c.crawlExternal !== false) + chk('cfg-resources', 'Crawl Resources (CSS / JS / Images as rows)', c.crawlResources !== false) + chk('cfg-imagesizes', 'Check Image Sizes', c.checkImageSizes !== false) + `<label>Default Scope <select id="cfg-scope"><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option><option value="all-subdomains">All Subdomains</option><option value="exact">Exact URL</option></select></label>`,
-    'extraction-note': () => '<p class="hint">Custom extraction rules are defined under Custom &gt; Custom Extraction; content extraction for titles, meta, headings, links, images and structured data always runs.</p>',
+    'crawl': () => '<h4>Resource Links</h4><div class="cfg-grid">' + chk('cfg-resources', 'Crawl Resources (master switch)', c.crawlResources !== false) + chk('cfg-crawlimages', 'Images', c.crawlImages !== false) + chk('cfg-crawlcss', 'CSS', c.crawlCss !== false) + chk('cfg-crawljs', 'JavaScript', c.crawlJs !== false) + chk('cfg-imagesizes', 'Check Image Sizes', c.checkImageSizes !== false) + '</div>' +
+      '<h4>Page Links</h4><div class="cfg-grid">' + chk('cfg-external', 'Check External Links (status checked once, never followed)', c.crawlExternal !== false) + chk('cfg-follow-int-nf', 'Follow Internal "nofollow"', !!c.followInternalNofollow) + chk('cfg-follow-ext-nf', 'Follow External "nofollow"', !!c.followExternalNofollow) + chk('cfg-iframes', 'Crawl Iframes', c.crawlIframes !== false) + chk('cfg-metarefresh', 'Follow Meta Refresh', c.followMetaRefresh !== false) + '</div>' +
+      '<h4>Crawl Behaviour</h4><div class="cfg-grid">' + chk('cfg-canonicals', 'Crawl Canonicals', c.crawlCanonicals !== false) + chk('cfg-pagination', 'Crawl Pagination (rel="next" / "prev")', !!c.crawlPagination) + chk('cfg-hreflang', 'Crawl Hreflang', !!c.crawlHreflang) + chk('cfg-amp', 'Crawl AMP', !!c.crawlAmp) + '</div>' +
+      '<h4>Limits &amp; Scope</h4>' + n('cfg-concurrency', 'Threads / Concurrency', c.concurrency) + n('cfg-depth', 'Max Crawl Depth (0 = unlimited)', c.maxDepth) + n('cfg-maxurls', 'Max URLs', c.maxUrls) + `<label>Default Scope <select id="cfg-scope"><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option><option value="all-subdomains">All Subdomains</option><option value="exact">Exact URL</option></select></label>`,
+    'extraction-note': () => '<h4>HTML</h4>' + chk('cfg-storehtml', 'Store HTML (needed for the View Source tab; makes saved crawls larger)', !!c.storeHtml) + '<p class="hint">Page titles, meta descriptions, headings, directives, links, images, hreflang and structured data are always extracted. Meta Keywords are not collected. Custom extraction rules live under Custom &gt; Custom Extraction.</p>',
     'limits': () => n('cfg-timeout', 'Request Timeout (ms)', c.timeoutMs) + n('cfg-maxredirects', 'Max Redirects', c.maxRedirects),
     'rendering': () => `<label>Rendering <select id="cfg-rendering"><option value="text">Text Only (raw HTML)</option><option value="rendered">JavaScript Rendering (rendered HTML comparison)</option></select></label><p class="hint">Rendered mode loads up to 200 HTML pages in a hidden Chromium window after the crawl and records rendered-vs-raw differences for the JavaScript tab.</p>`,
-    'advanced': () => ta('cfg-headers-x', 'Custom Headers (one per line, Name: Value)', Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'), 3) + t('cfg-cookies', 'Cookies', c.cookies, 'name=value; name2=value2'),
+    'advanced': () => t('cfg-cookies', 'Cookies Sent With Every Request', c.cookies, 'name=value; name2=value2') + '<p class="hint">Custom request headers are set under HTTP Header.</p>',
     'preferences': () => chk('cfg-spell', 'Enable basic spell check', c.spellCheck !== false) + '<p class="hint">Preferences are stored with the configuration.</p>',
-    'contentarea': () => n('cfg-contentarea', 'Content Area % (stored; word counts use full body text)', c.contentAreaPct ?? 100),
+    'contentarea': () => '<p class="hint">Word count, readability, spelling, grammar and duplicate checks use only the content area. One CSS selector per line (element, .class or #id).</p>' + ta('cfg-ca-include', 'Include Only These Elements (leave empty for the whole body)', linesOf((c.contentArea || {}).include), 3) + ta('cfg-ca-exclude', 'Exclude These Elements', linesOf((c.contentArea || { exclude: ['nav', 'footer'] }).exclude), 4),
     'duplicates': () => `<label>Near-Duplicate Similarity Threshold (0-1) <input type="text" id="cfg-dupthreshold" value="${esc(c.duplicatesThreshold ?? 0.92)}"></label>`,
-    'spelling': () => chk('cfg-spell2', 'Enable Spell Check', c.spellCheck !== false) + '<p class="hint">Grammar checking is not performed (grammar counts stay 0); a language tool integration is required for grammar.</p>',
+    'spelling': () => chk('cfg-spell2', 'Enable Spell Check', c.spellCheck !== false) + chk('cfg-grammar', 'Enable Grammar Check', c.grammarCheck !== false) + '<p class="hint">Spelling uses the bundled English dictionary. Grammar uses built-in rules (repeated words, a/an, "could of", sentence case, missing spaces); it is not a full grammar engine.</p>',
     'robots': () => chk('cfg-robots', 'Respect robots.txt', c.respectRobots !== false) + ta('cfg-customrobots', 'Custom robots.txt (overrides the live file when filled)', c.customRobotsText, 6),
     'rewriting': () => ta('cfg-rewrites', 'URL Rewrite Rules (one per line: pattern => replacement, regex)', linesOf((c.urlRewrites || []).map((r) => `${r.pattern} => ${r.replacement}`)), 4),
     'cdns': () => ta('cfg-cdns', 'CDN Host Patterns Treated as Internal (one regex per line)', linesOf(c.cdnPatterns), 3),
@@ -542,17 +676,17 @@ function renderConfigPage() {
     'exclude': () => ta('cfg-exclude', 'Exclude Regex (one per line)', linesOf(c.excludePatterns), 4),
     'speed': () => n('cfg-delay', 'Crawl Delay Between Requests (ms)', c.delayMs) + n('cfg-concurrency2', 'Threads / Concurrency', c.concurrency),
     'useragent': () => `<label>User-Agent Preset <select id="cfg-uapreset"><option value="spider">Seonfix Spider</option><option value="chrome">Chrome (Desktop)</option><option value="googlebot">Googlebot</option><option value="googlebot-smartphone">Googlebot Smartphone</option><option value="bingbot">Bingbot</option><option value="custom">Custom</option></select></label>` + t('cfg-uacustom', 'Custom User-Agent', c.userAgentPreset ? '' : (c.userAgent || '')),
-    'httpheader': () => '<p class="hint">Custom headers and cookies are edited under Spider &gt; Advanced.</p>',
+    'httpheader': () => ta('cfg-headers-x', 'Custom HTTP Request Headers (one per line, Name: Value)', Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'), 6) + '<p class="hint">For example Accept-Language: en-GB. The User-Agent is set on the User-Agent page.</p>',
     'customsearch': () => '<p class="hint">One per line: Name | contains / notcontains | text or code to find.</p>' + ta('cfg-search', 'Custom Search Rules', linesOf((c.searchRules || []).map((e) => `${e.name} | ${e.mode} | ${e.needle}`)), 4),
     'customextraction': () => '<p class="hint">One per line: Name | css / regex / xpath | selector or pattern. XPath covers a basic subset such as //tag and //tag[@attr=\'value\'].</p>' + ta('cfg-extractors', 'Custom Extraction Rules', linesOf((c.extractors || []).map((e) => `${e.name} | ${e.type} | ${e.value}`)), 4),
-    'customlinkpos': () => ta('cfg-linkpos', 'Custom Link Positions (notes stored with the configuration; the crawler records navigation/content/footer positions only when templates expose them)', c.customLinkPositionsNote || '', 3),
+    'customlinkpos': () => '<p class="hint">One rule per line: Position Name | text to match. The text is matched against the link\'s ancestor elements (tag names, ids and classes), first match wins, and your rules run before the defaults (nav/menu = Navigation, header = Header, footer = Footer, sidebar/aside = Sidebar, otherwise Content).</p>' + ta('cfg-linkpos', 'Custom Link Positions', linesOf((c.linkPositions || []).map((r) => `${r.name} | ${r.pattern}`)), 5),
     'api-ga': () => t('cfg-ga-id', 'Google Analytics Property ID', c.gaPropertyId || '') + '<p class="hint">Stored with the configuration. Pulling GA data requires Google OAuth, which is not yet connected.</p>',
     'api-gsc': () => t('cfg-gsc-site', 'Search Console Site URL', c.gscSiteUrl || '') + '<p class="hint">Stored with the configuration. Pulling Search Console data requires Google OAuth, which is not yet connected.</p>',
     'api-psi': () => `<label>PageSpeed Insights API Key <input type="password" id="cfg-psi-key" placeholder="${state.hasPsiKey ? 'Saved (enter to replace)' : 'AIza...'}"></label><p class="hint">The key is stored encrypted on this computer and powers the API sidebar tab and the PageSpeed tab.</p>`,
     'api-backlinks': () => t('cfg-ahrefs-key', 'Ahrefs API Key', '') + t('cfg-moz-key', 'Moz API Key', '') + '<p class="hint">Backlink API connections are not yet implemented; keys entered here are not stored or sent anywhere.</p>',
     'api-ai': () => t('cfg-openai-key', 'OpenAI API Key', '') + '<p class="hint">AI provider connections are not yet implemented; keys entered here are not stored or sent anywhere.</p>',
     'auth-basic': () => t('cfg-basic-user', 'Basic Auth Username', (c.basicAuth || {}).username || '') + `<label>Basic Auth Password <input type="password" id="cfg-basic-pass" value="${esc((c.basicAuth || {}).password || '')}"></label><p class="hint">Sent as an Authorization: Basic header with every crawl request.</p>`,
-    'auth-form': () => t('cfg-form-url', 'Web Form Login URL', ((c.formAuth || {}).url) || '') + t('cfg-form-user-field', 'Username Field Name', ((c.formAuth || {}).userField) || '') + t('cfg-form-user', 'Username', ((c.formAuth || {}).username) || '') + '<p class="hint">Stored with the configuration. Automated form login is not yet implemented; use Basic auth or cookies (Spider &gt; Advanced) for protected sites in this version.</p>',
+    'auth-form': () => t('cfg-form-url', 'Login Page URL', ((c.formAuth || {}).url) || '', 'https://example.com/login') + t('cfg-form-user', 'Username', ((c.formAuth || {}).username) || '') + `<label>Password <input type="password" id="cfg-form-pass" placeholder="${state.hasFormPassword ? 'Saved (enter to replace)' : ''}"></label>` + t('cfg-form-user-field', 'Username Field Name (optional, detected automatically)', ((c.formAuth || {}).userField) || '') + t('cfg-form-pass-field', 'Password Field Name (optional, detected automatically)', ((c.formAuth || {}).passField) || '') + '<p class="hint">Before crawling, Seonfix Spider opens the login page, fills the form that has a password field (keeping hidden fields such as CSRF tokens), submits it and uses the session cookies for the whole crawl. The password is stored encrypted on this computer. Only use this on sites you are allowed to crawl, and exclude logout URLs.</p>' + '',
     'segments': () => '<p class="hint">One per line: Name | URL pattern or regex.</p>' + ta('cfg-segments', 'Segments', linesOf((c.segments || []).map((s) => `${s.name} | ${s.pattern}`)), 5),
     'analysis': () => '<p class="hint">Crawl Analysis &gt; Analyse in the menu recomputes Link Score, orphan pages and near-duplicate groups for the current crawl.</p>' + `<label>Near-Duplicate Similarity Threshold (0-1) <input type="text" id="cfg-dupthreshold2" value="${esc(c.duplicatesThreshold ?? 0.92)}"></label>`,
     'profiles': () => '<p class="hint">Use the Configuration &gt; Profiles menu to load/save profiles, or set the current configuration as the default.</p>',
@@ -571,11 +705,16 @@ function readConfigPage() {
   const chkV = (id, key) => { const e = cfgField(id); if (e) c[key] = e.checked; };
   const linesV = (id) => { const e = cfgField(id); return e ? e.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : null; };
   num('cfg-concurrency', 'concurrency'); num('cfg-concurrency2', 'concurrency'); num('cfg-depth', 'maxDepth'); num('cfg-maxurls', 'maxUrls');
-  num('cfg-timeout', 'timeoutMs'); num('cfg-maxredirects', 'maxRedirects'); num('cfg-delay', 'delayMs'); num('cfg-contentarea', 'contentAreaPct');
+  num('cfg-timeout', 'timeoutMs'); num('cfg-maxredirects', 'maxRedirects'); num('cfg-delay', 'delayMs');
   chkV('cfg-external', 'crawlExternal'); chkV('cfg-resources', 'crawlResources'); chkV('cfg-imagesizes', 'checkImageSizes');
-  chkV('cfg-robots', 'respectRobots'); chkV('cfg-spell', 'spellCheck'); chkV('cfg-spell2', 'spellCheck');
+  chkV('cfg-robots', 'respectRobots'); chkV('cfg-spell', 'spellCheck'); chkV('cfg-spell2', 'spellCheck'); chkV('cfg-grammar', 'grammarCheck');
+  chkV('cfg-crawlimages', 'crawlImages'); chkV('cfg-crawlcss', 'crawlCss'); chkV('cfg-crawljs', 'crawlJs');
+  chkV('cfg-follow-int-nf', 'followInternalNofollow'); chkV('cfg-follow-ext-nf', 'followExternalNofollow'); chkV('cfg-iframes', 'crawlIframes'); chkV('cfg-metarefresh', 'followMetaRefresh');
+  chkV('cfg-canonicals', 'crawlCanonicals'); chkV('cfg-pagination', 'crawlPagination'); chkV('cfg-hreflang', 'crawlHreflang'); chkV('cfg-amp', 'crawlAmp'); chkV('cfg-storehtml', 'storeHtml');
+  const cai = linesV('cfg-ca-include'); const cae = linesV('cfg-ca-exclude'); if (cai || cae) c.contentArea = { include: cai || [], exclude: cae || [] };
+  const lpos = linesV('cfg-linkpos'); if (lpos) c.linkPositions = lpos.map((l) => { const [name, ...rest] = l.split('|').map((x) => x.trim()); return rest.length ? { name, pattern: rest.join('|') } : null; }).filter(Boolean);
   txt('cfg-scope', 'scope'); txt('cfg-rendering', 'rendering'); txt('cfg-customrobots', 'customRobotsText');
-  txt('cfg-cookies', 'cookies'); txt('cfg-ga-id', 'gaPropertyId'); txt('cfg-gsc-site', 'gscSiteUrl'); txt('cfg-linkpos', 'customLinkPositionsNote');
+  txt('cfg-cookies', 'cookies'); txt('cfg-ga-id', 'gaPropertyId'); txt('cfg-gsc-site', 'gscSiteUrl'); 
   const dt = cfgField('cfg-dupthreshold') || cfgField('cfg-dupthreshold2'); if (dt) c.duplicatesThreshold = Math.min(1, Math.max(0, Number(dt.value) || 0.92));
   const ua = cfgField('cfg-uapreset'); if (ua) { c.userAgentPreset = ua.value === 'custom' ? '' : ua.value; c.userAgent = ua.value === 'custom' ? (cfgField('cfg-uacustom').value || '') : (state.uaPresets[ua.value] || ''); }
   const hdrs = linesV('cfg-headers-x'); if (hdrs) { c.headers = {}; for (const l of hdrs) { const i = l.indexOf(':'); if (i > 0) c.headers[l.slice(0, i).trim()] = l.slice(i + 1).trim(); } }
@@ -587,7 +726,7 @@ function readConfigPage() {
   const extr = linesV('cfg-extractors'); if (extr) c.extractors = extr.map((l) => { const [name, type, ...rest] = l.split('|').map((s) => s.trim()); return name && rest.length ? { name, type: (type || 'css').toLowerCase(), value: rest.join('|') } : null; }).filter(Boolean);
   const segs = linesV('cfg-segments'); if (segs) c.segments = segs.map((l) => { const [name, ...rest] = l.split('|').map((s) => s.trim()); return rest.length ? { name, pattern: rest.join('|') } : { name, pattern: name }; }).filter((s) => s.pattern);
   const bu = cfgField('cfg-basic-user'); if (bu) c.basicAuth = { username: bu.value, password: (cfgField('cfg-basic-pass') || {}).value || '' };
-  const fu = cfgField('cfg-form-url'); if (fu) c.formAuth = { url: fu.value, userField: (cfgField('cfg-form-user-field') || {}).value || '', username: (cfgField('cfg-form-user') || {}).value || '' };
+  const fu = cfgField('cfg-form-url'); if (fu) { c.formAuth = { url: fu.value.trim(), userField: (cfgField('cfg-form-user-field') || {}).value || '', passField: (cfgField('cfg-form-pass-field') || {}).value || '', username: (cfgField('cfg-form-user') || {}).value || '' }; const fp = cfgField('cfg-form-pass'); if (fp && fp.value) state.pendingFormPassword = fp.value; }
   configDraft = c;
   return c;
 }
@@ -596,6 +735,7 @@ async function saveConfigFromDialog() {
   const psi = cfgField('cfg-psi-key');
   const payload = { config };
   if (psi && psi.value) payload.apiKeys = { pagespeed: psi.value };
+  if (state.pendingFormPassword) { payload.apiKeys = { ...(payload.apiKeys || {}), formPassword: state.pendingFormPassword }; state.hasFormPassword = true; state.pendingFormPassword = null; }
   await window.spider.configSave(payload);
   state.config = config; configDraft = null;
   if (psi && psi.value) state.hasPsiKey = true;
@@ -617,16 +757,30 @@ function setProgress(text, pct) {
     $('#progress-label').textContent = `Crawl ${Math.min(100, Math.round(pct))}%`;
   }
 }
-function setModeStatus() { $('#mode-status').textContent = `Spider Mode: ${state.crawling ? (state.paused ? 'Paused' : 'Active') : 'Idle'}`; }
+function setModeStatus() { const m = { spider: 'Spider', list: 'List', serp: 'SERP', compare: 'Compare' }[state.mode] || 'Spider'; $('#mode-status').textContent = `${m} Mode: ${state.crawling ? (state.paused ? 'Paused' : 'Active') : 'Idle'}`; }
 function setCountsLine() {
+  const el = $('#crawl-counts');
   if (state.crawling) {
     const d = state.discovered || 0; const c = state.livePages.length;
     const pct = d ? Math.round((c / d) * 100) : 0;
-    $('#crawl-counts').textContent = `${c} of ${d} (${pct}%) ${Math.max(0, d - c)} Remaining`;
+    el.textContent = `${state.paused ? 'Paused' : 'Crawling'} ${c} of ${d} (${pct}%) ${Math.max(0, d - c)} Remaining`;
   } else if (state.crawl) {
     const t = state.crawl.stats.total;
-    $('#crawl-counts').textContent = `${t} of ${t} (100%) 0 Remaining`;
-  } else $('#crawl-counts').textContent = '';
+    el.textContent = state.crawl.mode === 'serp' ? `SERP Mode: ${t} rows analysed` : `Completed ${t} of ${t} (100%) 0 Remaining`;
+  } else el.textContent = '';
+  el.classList.toggle('done', !!state.crawl && !state.crawling);
+  setRateLine();
+}
+/* "Average: N URL/s. Current: N URL/s." like the SF status bar; current is
+ * measured over the last 5 seconds of crawled pages. */
+function setRateLine() {
+  const el = $('#crawl-rate'); const r = state.rate;
+  if (!r.started) { el.textContent = ''; return; }
+  const now = state.crawling ? Date.now() : (r.ended || Date.now());
+  const n = state.crawling ? state.livePages.length : (state.crawl ? state.crawl.stats.crawled || state.crawl.stats.total : 0);
+  const avg = n / Math.max(0.5, (now - r.started) / 1000);
+  const recent = r.samples.filter((t) => t >= now - 5000).length / 5;
+  el.textContent = `Average: ${avg.toFixed(2)} URL/s. Current: ${(state.crawling ? recent : 0).toFixed(2)} URL/s.`;
 }
 function currentConfig() {
   const c = { ...(state.config || {}), mode: state.mode === 'compare' ? 'spider' : state.mode, scope: $('#scope-select').value };
@@ -634,13 +788,15 @@ function currentConfig() {
 }
 async function startCrawl(urlOverride) {
   const config = currentConfig();
-  if (config.mode === 'list' || config.mode === 'serp') { $('#list-title').textContent = config.mode === 'serp' ? 'SERP Mode - URLs to Crawl' : 'List Mode - URLs to Crawl'; $('#list-dialog').showModal(); return; }
+  if (config.mode === 'serp') { $('#serp-dialog').showModal(); return; }
+  if (config.mode === 'list') { $('#list-title').textContent = 'List Mode - URLs to Crawl'; $('#list-dialog').showModal(); return; }
   const url = urlOverride || $('#url-input').value.trim();
   if (!url) { setProgress('Enter a URL to spider.'); return; }
   await runCrawl({ url, config });
 }
 async function runCrawl({ url, listText, config }) {
   state.crawling = true; state.paused = false; state.livePages = []; state.discovered = 0;
+  state.rate = { started: Date.now(), samples: [], ended: 0 };
   state.crawl = null; state.selected = null; state.sideFilter = null; state.selectedIssue = null;
   $('#btn-start').textContent = 'Pause'; $('#btn-clear').classList.add('hidden');
   setProgress(null, 0); setModeStatus(); setCountsLine(); renderAll();
@@ -652,7 +808,8 @@ async function runCrawl({ url, listText, config }) {
     const u = crawl.rootUrl;
     if (u && !state.recentUrls.includes(u)) { state.recentUrls = [u, ...state.recentUrls].slice(0, 12); }
   } catch (e) { setProgress('Crawl failed: ' + e.message); }
-  state.crawling = false;
+  state.crawling = false; state.rate.ended = Date.now();
+  if (state.crawl && state.crawl.login && state.crawl.login.error) setProgress('Web Form login failed: ' + state.crawl.login.error);
   $('#btn-start').textContent = 'Start'; $('#btn-clear').classList.remove('hidden');
   setModeStatus(); setCountsLine(); renderAll();
 }
@@ -676,7 +833,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const got = await window.spider.configGet();
   state.config = got.config; state.uaPresets = got.uaPresets || {};
   state.filterMeta = got.filterMeta || [];
-  state.hasPsiKey = !!got.hasPagespeedKey;
+  state.hasPsiKey = !!got.hasPagespeedKey; state.hasFormPassword = !!got.hasFormPassword; state.a11yDefs = got.a11yDefs || [];
   state.recentUrls = got.recentUrls || [];
   state.schedules = got.schedules || [];
   if (state.config.scope) $('#scope-select').value = state.config.scope;
@@ -731,7 +888,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', (e) => { if (!e.target.closest('#columns-popup') && !e.target.closest('#btn-columns')) $('#columns-popup').classList.add('hidden'); if (!e.target.closest('#tabs-popup') && !e.target.closest('#tabs-overflow')) $('#tabs-popup').classList.add('hidden'); });
   $('#tabs-reset').addEventListener('click', () => { state.visibleTabs = [...DEFAULT_TAB_ORDER]; lsSet('visibleTabs', state.visibleTabs); renderTabsPopup(); renderAll(); });
   document.querySelectorAll('#bottom-tabs button').forEach((b) => b.addEventListener('click', () => { state.btab = b.dataset.btab; state.bottomSearch = ''; renderBottom(); }));
-  document.querySelectorAll('#side-tabs button').forEach((b) => b.addEventListener('click', () => { state.stab = b.dataset.stab; renderSidebar(); if (state.stab !== 'overview') setChart('', '<div class="chart-placeholder"><svg viewBox="0 0 60 60" width="52" height="52"><circle cx="30" cy="30" r="22" fill="none" stroke="#39424d" stroke-width="7"/><path d="M30 8a22 22 0 0 1 19 12" fill="none" stroke="#00C852" stroke-width="7"/></svg><p>Click on an SEO Element to display a graph.</p></div>'); }));
+  document.querySelectorAll('#side-tabs button').forEach((b) => b.addEventListener('click', () => { state.stab = b.dataset.stab; renderSidebar(); if (!['overview', 'issues'].includes(state.stab)) setChart(state.stab === 'responsetimes' ? 'Response Times' : '', '<div class="chart-placeholder"><svg viewBox="0 0 60 60" width="52" height="52"><circle cx="30" cy="30" r="22" fill="none" stroke="#39424d" stroke-width="7"/><path d="M30 8a22 22 0 0 1 19 12" fill="none" stroke="#00C852" stroke-width="7"/></svg><p>Click on an SEO Element to display a graph.</p></div>'); }));
 
   /* config dialog */
   $('#cfg-cancel').addEventListener('click', () => { configDraft = null; $('#config-dialog').close(); });
@@ -740,6 +897,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   /* list dialog */
   $('#list-cancel').addEventListener('click', () => $('#list-dialog').close());
   $('#list-go').addEventListener('click', () => { const listText = $('#list-urls').value; $('#list-dialog').close(); runCrawl({ listText, config: currentConfig() }); });
+
+  /* SERP mode dialog */
+  $('#serp-cancel').addEventListener('click', () => $('#serp-dialog').close());
+  $('#serp-file').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { $('#serp-input').value = String(rd.result || ''); }; rd.readAsText(f); });
+  $('#serp-go').addEventListener('click', async () => {
+    try {
+      const crawl = await window.spider.serpAnalyse($('#serp-input').value);
+      $('#serp-dialog').close();
+      state.crawl = crawl; state.livePages = []; state.selected = null; state.rate = { started: 0, samples: [] };
+      if (crawl.filterMeta) state.filterMeta = crawl.filterMeta;
+      state.tab = 'titles'; state.filterId = 'all'; state.btab = 'serp'; focusSidebarOnTab('titles');
+      setProgress('SERP mode: ' + crawl.pages.length + ' rows analysed', 100); $('#btn-clear').classList.remove('hidden'); renderAll(); scrollSidebarToSection();
+    } catch (e) { alert(e.message); }
+  });
+
+  /* Response Codes: Internal & External dropdown */
+  $('#scope-filter').addEventListener('change', (e) => { state.scopeFilter = e.target.value; renderGrid(); });
 
   /* sitemap dialog */
   let sitemapKind = 'xml';
@@ -765,7 +939,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   window.spider.onPage((page) => {
     if (!state.crawling) return;
-    state.livePages.push(page);
+    state.livePages.push(page); state.rate.samples.push(Date.now()); if (state.rate.samples.length > 400) state.rate.samples.splice(0, 200);
     if (state.livePages.length % 3 === 0 || state.livePages.length < 10) { renderGrid(); }
     setCountsLine();
   });
@@ -784,9 +958,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       else if (action === 'mode') {
         state.mode = arg;
         if (arg === 'compare') { state.tab = 'compare'; renderAll(); doCompare(); }
-        else if (arg === 'list' || arg === 'serp') { $('#list-title').textContent = arg === 'serp' ? 'SERP Mode - URLs to Crawl' : 'List Mode - URLs to Crawl'; $('#list-dialog').showModal(); }
+        else if (arg === 'serp') $('#serp-dialog').showModal();
+        else if (arg === 'list') { $('#list-title').textContent = 'List Mode - URLs to Crawl'; $('#list-dialog').showModal(); }
+        setModeStatus();
       }
-      else if (action === 'config') openConfig();
+      else if (action === 'config') openConfig(arg);
       else if (action === 'profile-load') { const r = await window.spider.profileLoad(); if (r) { state.config = r.config; setProgress('Profile loaded: ' + r.path); } }
       else if (action === 'profile-load-path') { const r = await window.spider.profileLoad(arg); if (r) { state.config = r.config; setProgress('Profile loaded: ' + r.path); } }
       else if (action === 'profile-save') { const r = await window.spider.profileSave(state.config || {}); if (r && r.saved) setProgress('Profile saved'); }

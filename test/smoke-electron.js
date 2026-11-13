@@ -22,6 +22,7 @@ exports.run = async function run(win) {
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => wc.executeJavaScript(code, true);
+  const shot = async (name) => { try { const img = await wc.capturePage(); fs.writeFileSync(path.join(out, name + '.png'), img.toPNG()); } catch (_) {} };
   const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: detail == null ? '' : String(detail) }); if (!ok) console.log(`  FAIL ${name} ${detail ?? ''}`); };
 
   // fixture sites (main + a second origin acting as "external")
@@ -79,6 +80,7 @@ exports.run = async function run(win) {
   let crawled = false;
   for (let i = 0; i < 150; i++) { await sleep(200); const done = await js('!!(window.__spiderState && window.__spiderState.crawl)').catch(() => false); if (done) { crawled = true; break; } }
   check('UI crawl completed', crawled);
+  await sleep(300);
   const pageCount = await js('window.__spiderState.crawl.pages.length');
   check('crawl found fixture pages (>= 5 incl. resources + external)', pageCount >= 5, pageCount);
   check('progress shows Crawl 100%', await js('/Crawl 100%/.test(document.querySelector("#progress-label").textContent)'), await js('document.querySelector("#progress-label").textContent'));
@@ -146,6 +148,70 @@ exports.run = async function run(win) {
   await js('document.querySelector(\'#bottom-tabs button[data-btab="inlinks"]\').click(); true');
   await sleep(150);
   check('Inlinks bottom pane renders', await js('document.querySelectorAll("#bottom-body table").length >= 0 && /Inlinks|From/.test(document.querySelector("#bottom-body").innerText)'));
+
+  // v2.1: every main tab opens its own section in the Overview (SF behaviour)
+  const unmapped = await js('window.SF_TABS.map(t => t.id).filter(id => !sectionForTab(id))');
+  check('every main tab maps to an Overview section', unmapped.length === 0, unmapped.join(','));
+  await js('document.querySelector(\'#tabs button[data-tab="canonicals"]\').click(); true');
+  await sleep(250);
+  check('clicking Canonicals tab switches sidebar to Overview', await js('window.__spiderState.stab === "overview"'));
+  check('Canonicals > All row highlighted', await js('!!document.querySelector(\'tr.filter-row.selected[data-filter="can-all"]\')'));
+  check('Canonicals chart drawn (vertical bars)', await js('document.querySelector("#chart-title").textContent === "Canonicals" && !!document.querySelector("#side-chart svg.vbar")'), await js('document.querySelector("#chart-title").textContent'));
+  const secTop = await js('(() => { const b = document.querySelector("#side-body"); const r = document.querySelector(\'tr.section-row[data-section="Canonicals"]\'); return r ? Math.round(r.getBoundingClientRect().top - b.getBoundingClientRect().top) : -999; })()');
+  check('Overview scrolled to the Canonicals section', secTop >= 0 && secTop < 120, secTop);
+  await shot('canonicals');
+  // Response Codes Internal & External dropdown
+  await js('document.querySelector(\'#tabs button[data-tab="responses"]\').click(); true');
+  await sleep(150);
+  check('Response Codes shows Internal & External dropdown', await js('!document.querySelector("#scope-filter").classList.contains("hidden")'));
+  const allRc = await js('window.__spiderState && document.querySelectorAll("#grid tbody tr").length');
+  await js('const sf = document.querySelector("#scope-filter"); sf.value = "external"; sf.dispatchEvent(new Event("change")); true');
+  await sleep(150);
+  const extRc = await js('document.querySelectorAll("#grid tbody tr").length');
+  check('External option narrows Response Codes rows', extRc < allRc, `${allRc} -> ${extRc}`);
+  await js('const sf2 = document.querySelector("#scope-filter"); sf2.value = "all"; sf2.dispatchEvent(new Event("change")); true');
+  // Issue Details: Description + How To Fix, and click jumps to the filter
+  await js('document.querySelector(\'#side-tabs button[data-stab="issues"]\').click(); true');
+  await sleep(150);
+  await js('document.querySelector("tr.issue-trow").click(); true');
+  await sleep(250);
+  const det = await js('document.querySelector("#side-chart").innerText');
+  check('Issue Details shows Description and How To Fix', /Description/.test(det) && /How To Fix/.test(det), det.slice(0, 160));
+  check('clicking an issue filters the grid to it', await js('window.__spiderState.filterId !== "all" || !!window.__spiderState.issueName'));
+  check('Copy button enabled for selected issue', await js('!!document.querySelector("#issue-copy") && !document.querySelector("#issue-copy").disabled'));
+  await shot('issues');
+  // status bar rate + bottom tabs
+  check('status bar shows Average/Current URL/s', await js('/Average: [\\d.]+ URL\\/s\\. Current: [\\d.]+ URL\\/s\\./.test(document.querySelector("#crawl-rate").textContent)'), await js('document.querySelector("#crawl-rate").textContent'));
+  check('status bar shows Completed N of N', await js('/Completed \\d+ of \\d+ \\(100%\\) 0 Remaining/.test(document.querySelector("#crawl-counts").textContent)'));
+  const btabs = await js('[...document.querySelectorAll("#bottom-tabs button")].map(b => b.dataset.btab)');
+  check('15 bottom-pane tabs', btabs.length === 15, btabs.join(','));
+  await js('document.querySelector(\'#tabs button[data-tab="internal"]\').click(); true');
+  await sleep(150);
+  await js('document.querySelector("#grid tbody tr").click(); true');
+  for (const bt of btabs) { await js(`document.querySelector('#bottom-tabs button[data-btab="${bt}"]').click(); true`); await sleep(60); }
+  check('every bottom tab renders content', await js('document.querySelector("#bottom-body").innerText.length > 0'));
+  await js('document.querySelector(\'#bottom-tabs button[data-btab="outlinks"]\').click(); true');
+  await sleep(100);
+  await shot('outlinks');
+  check('Outlinks show Link Position column', await js('/Link Position/.test(document.querySelector("#bottom-body").innerText)'));
+  check('no Meta Keywords anywhere in the UI', await js('!/meta keywords/i.test(document.body.innerText)'));
+  // Accessibility + Spelling tabs have data
+  await js('document.querySelector(\'#tabs button[data-tab="accessibility"]\').click(); true');
+  await sleep(150);
+  check('Accessibility tab lists HTML pages', await js('document.querySelectorAll("#grid tbody tr").length >= 1'));
+  check('Accessibility section in Overview', await js('!!document.querySelector(\'tr.section-row[data-section="Accessibility"]\')'));
+  // SERP mode (no crawling)
+  const keepCrawl = await js('JSON.stringify(window.__spiderState.crawl.pages.length)');
+  wc.send('menu:action', 'mode', 'serp');
+  await sleep(250);
+  check('SERP dialog opens', await js('document.querySelector("#serp-dialog").open'));
+  await js(`document.querySelector("#serp-input").value = "URL,Title,Description\\nhttps://example.com/a,Short,Tiny\\nhttps://example.com/b,${'A very long page title that keeps going and going well past the pixel limit for Google results'},${'d'.repeat(40)}"; document.querySelector("#serp-go").click(); true`);
+  await sleep(400);
+  check('SERP mode analyses rows without crawling', await js('window.__spiderState.crawl && window.__spiderState.crawl.mode === "serp" && window.__spiderState.crawl.pages.length === 2'), keepCrawl);
+  check('SERP mode flags long title', await js('window.__spiderState.crawl.pages[1].filters.includes("title-over-60") && window.__spiderState.crawl.pages[0].filters.includes("title-below-30")'));
+  check('SERP mode opens Page Titles with snippet pane', await js('window.__spiderState.tab === "titles" && window.__spiderState.btab === "serp"'));
+  wc.send('menu:action', 'mode', 'spider');
+  await sleep(100);
 
   // Config window via menu action: all sections present
   wc.send('menu:action', 'config');

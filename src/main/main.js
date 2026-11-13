@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { Crawler, DEFAULT_CONFIG, UA_PRESETS, generateSitemap, generateImageSitemap, compareCrawls, finalizeCrawl } = require('./crawler');
 const { FILTER_META } = require('./filters');
+const { serpAnalyse } = require('./serp');
 const { ensureUrl, normalizeUrl } = require('./urlutil');
 const { parsePage } = require('./extract');
 
@@ -52,6 +53,10 @@ function buildReport(kind, crawl) {
     case 'http-headers': {
       const names = [...new Set(pages.flatMap((p) => Object.keys(p.headers || {})))].sort();
       return { filename: 'http-headers.csv', content: toCsv(['Address', 'Status Code', ...names], pages.filter((p) => p.headers).map((p) => [p.address, p.statusCode ?? '', ...names.map((n) => (p.headers || {})[n] || '')])) };
+    }
+    case 'accessibility': {
+      const { A11Y_CHECKS } = require('./accessibility');
+      return { filename: 'accessibility-violations.csv', content: toCsv(['Address', 'Total Violations', ...A11Y_CHECKS.map((c) => `${c.name} (WCAG ${c.wcag})`)], pages.filter((p) => p.a11y).map((p) => [p.address, p.a11yViolations || 0, ...A11Y_CHECKS.map((c) => ((p.a11y || {})[c.id] || {}).count || 0)])) };
     }
     case 'cookies': {
       const rows = [];
@@ -208,7 +213,17 @@ function buildMenu() {
     ] },
     { label: 'Mode', submenu: [modeItem('Spider', 'spider'), modeItem('List', 'list'), modeItem('SERP', 'serp'), modeItem('Compare', 'compare')] },
     { label: 'Configuration', submenu: [
-      { label: 'Crawl Config', click: send('config') },
+      { label: 'Crawl Config', accelerator: 'CmdOrCtrl+;', click: send('config') },
+      { type: 'separator' },
+      { label: 'Spider', submenu: [['Crawl', 'crawl'], ['Extraction', 'extraction-note'], ['Limits', 'limits'], ['Rendering', 'rendering'], ['Advanced', 'advanced'], ['Preferences', 'preferences']].map(([l, id]) => ({ label: l, click: send('config', id) })) },
+      { label: 'Content', submenu: [['Content Area', 'contentarea'], ['Duplicates', 'duplicates'], ['Spelling & Grammar', 'spelling']].map(([l, id]) => ({ label: l, click: send('config', id) })) },
+      ...[['robots.txt', 'robots'], ['URL Rewriting', 'rewriting'], ['CDNs', 'cdns'], ['Include', 'include'], ['Exclude', 'exclude'], ['Speed', 'speed'], ['User-Agent', 'useragent'], ['HTTP Header', 'httpheader']].map(([l, id]) => ({ label: l, click: send('config', id) })),
+      { label: 'Custom', submenu: [['Custom Search', 'customsearch'], ['Custom Extraction', 'customextraction'], ['Custom Link Positions', 'customlinkpos']].map(([l, id]) => ({ label: l, click: send('config', id) })) },
+      { label: 'API Access', submenu: [['Google Analytics', 'api-ga'], ['Search Console', 'api-gsc'], ['PageSpeed Insights', 'api-psi'], ['Backlink APIs', 'api-backlinks'], ['AI', 'api-ai']].map(([l, id]) => ({ label: l, click: send('config', id) })) },
+      { label: 'Authentication', submenu: [['Standards Based (Basic)', 'auth-basic'], ['Forms Based (Web Form)', 'auth-form']].map(([l, id]) => ({ label: l, click: send('config', id) })) },
+      { label: 'Segments', click: send('config', 'segments') },
+      { label: 'Crawl Analysis', click: send('config', 'analysis') },
+      { type: 'separator' },
       { label: 'Profiles', submenu: [
         { label: 'Load...', click: send('profile-load') },
         { label: 'Load Recent', submenu: recentProfiles.length ? recentProfiles.map((f) => ({ label: path.basename(f), click: send('profile-load-path', f) })) : [{ label: 'No Recent Profiles', enabled: false }] },
@@ -234,19 +249,21 @@ function buildMenu() {
       bulkSection('Security', 'Security', 'security'),
       bulkSection('Response Codes', 'Response Codes', 'responses'),
       bulkSection('Content', 'Content', 'content'),
-      bulkSection('Images', 'Content', 'images'),
+      bulkSection('Images', 'Images', 'images'),
       bulkSection('Canonicals', 'Canonicals', 'canonicals'),
       bulkSection('Directives', 'Directives', 'directives'),
       bulkSection('JavaScript', 'JavaScript', 'javascript'),
       bulkSection('AMP', 'AMP', 'amp'),
       bulkSection('Structured Data', 'Structured Data', 'structured'),
       bulkSection('Sitemaps', 'Sitemaps', 'sitemaps'),
+      bulkSection('Accessibility', 'Accessibility', 'accessibility'),
+      bulkSection('Spelling & Grammar', 'Spelling & Grammar', 'spelling'),
       { label: 'Custom Search', click: send('bulk-tab', 'search') },
       { label: 'Custom Extraction', click: send('bulk-tab', 'extraction') },
       { label: 'URL Inspection', click: send('bulk-inspection') },
       { label: 'Issues', click: send('bulk-issues') },
     ] },
-    { label: 'Reports', submenu: ['overview', 'redirect-chains', 'redirects', 'orphans', 'serp-summary', 'canonical-errors', 'insecure-content', 'structured-data', 'http-headers', 'cookies'].map((k) => ({ label: { overview: 'Crawl Overview', 'redirect-chains': 'Redirect Chains', redirects: 'Redirects', orphans: 'Orphan Pages', 'serp-summary': 'SERP Summary', 'canonical-errors': 'Canonical Errors', 'insecure-content': 'Insecure Content', 'structured-data': 'Structured Data', 'http-headers': 'HTTP Headers', cookies: 'Cookies' }[k], click: send('report', k) })) },
+    { label: 'Reports', submenu: ['overview', 'redirect-chains', 'redirects', 'orphans', 'serp-summary', 'canonical-errors', 'insecure-content', 'structured-data', 'http-headers', 'cookies', 'accessibility'].map((k) => ({ label: { accessibility: 'Accessibility Violations', overview: 'Crawl Overview', 'redirect-chains': 'Redirect Chains', redirects: 'Redirects', orphans: 'Orphan Pages', 'serp-summary': 'SERP Summary', 'canonical-errors': 'Canonical Errors', 'insecure-content': 'Insecure Content', 'structured-data': 'Structured Data', 'http-headers': 'HTTP Headers', cookies: 'Cookies' }[k], click: send('report', k) })) },
     { label: 'Sitemaps', submenu: [
       { label: 'Create XML Sitemap...', click: send('sitemap-config', 'xml') },
       { label: 'Create Images Sitemap...', click: send('sitemap-config', 'image') },
@@ -272,11 +289,15 @@ function registerIpc() {
   ipcMain.handle('config:get', () => {
     const s = loadSettings();
     const config = { ...DEFAULT_CONFIG, ...(s.defaultConfig || {}), ...(s.config || {}) };
-    return { config, recent: s.recent || [], recentUrls: (s.recent || []).map((r) => r.rootUrl), schedules: s.schedules || [], hasPagespeedKey: !!(s.apiKeysEnc || {}).pagespeed, uaPresets: UA_PRESETS, filterMeta: FILTER_META };
+    return { config, recent: s.recent || [], recentUrls: (s.recent || []).map((r) => r.rootUrl), schedules: s.schedules || [], hasPagespeedKey: !!(s.apiKeysEnc || {}).pagespeed, hasFormPassword: !!(s.apiKeysEnc || {}).formPassword, uaPresets: UA_PRESETS, filterMeta: FILTER_META, a11yDefs: require('./accessibility').A11Y_CHECKS };
   });
   ipcMain.handle('config:save', (_e, payload) => {
     const s = loadSettings();
-    if (payload && payload.config) { s.config = payload.config; if (payload.apiKeys) storeApiKeys(s, payload.apiKeys); }
+    if (payload && payload.config) {
+      const cfg = { ...payload.config };
+      if (cfg.formAuth) { cfg.formAuth = { ...cfg.formAuth }; delete cfg.formAuth.password; }
+      s.config = cfg; if (payload.apiKeys) storeApiKeys(s, payload.apiKeys);
+    }
     else s.config = payload;
     saveSettings(s); return { ok: true };
   });
@@ -285,6 +306,7 @@ function registerIpc() {
     const saved = loadSettings();
     const config = { ...DEFAULT_CONFIG, ...(saved.defaultConfig || {}), ...(saved.config || {}), ...(payload.config || {}) };
     const psiKey = readApiKey(saved, 'pagespeed'); if (psiKey) config.pagespeedKey = psiKey;
+    if (config.formAuth && config.formAuth.url) config.formAuth = { ...config.formAuth, password: readApiKey(saved, 'formPassword') };
     let seeds = [];
     if (config.mode === 'list' || config.mode === 'serp') {
       seeds = (payload.listText || '').split(/\r?\n/).map((l) => normalizeUrl(l.trim())).filter(Boolean);
@@ -314,6 +336,7 @@ function registerIpc() {
       return crawl;
     } finally { activeCrawler = null; }
   });
+  ipcMain.handle('serp:analyse', (_e, text) => { const crawl = serpAnalyse(text); currentCrawl = crawl; return crawl; });
   ipcMain.handle('crawl:pause', () => { if (activeCrawler) activeCrawler.pause(); return { ok: true }; });
   ipcMain.handle('crawl:resume', () => { if (activeCrawler) activeCrawler.resume(); return { ok: true }; });
   ipcMain.handle('crawl:stop', () => { if (activeCrawler) activeCrawler.stop(); return { ok: true }; });
@@ -359,7 +382,10 @@ function registerIpc() {
     const r = await dialog.showOpenDialog(win, { title: 'Pick Saved Crawl to Compare', properties: ['openFile'], filters: [{ name: 'Seonfix Spider Crawl', extensions: ['json'] }] });
     if (r.canceled || !r.filePaths.length) return null;
     const other = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
-    return { otherRoot: other.rootUrl, otherAt: other.startedAt, diff: compareCrawls(other, currentCrawl) };
+    if (!other || !Array.isArray(other.pages)) throw new Error('That file is not a saved Seonfix Spider crawl.');
+    // recompute filters on the older crawl so new v2.1 filters compare fairly
+    if (other.mode !== 'serp') { const fin = finalizeCrawl(other.pages, other.rootUrl, { ...DEFAULT_CONFIG, ...(other.configSnapshot || {}) }); other.issues = fin.issues; }
+    return { otherRoot: other.rootUrl, otherAt: other.startedAt, otherPath: r.filePaths[0], diff: compareCrawls(other, currentCrawl) };
   });
   ipcMain.handle('file:saveText', async (_e, { defaultPath, content }) => {
     const r = await dialog.showSaveDialog(win, { defaultPath: defaultPath || 'export.csv' });
@@ -401,6 +427,10 @@ function registerIpc() {
         const audits = (j.lighthouseResult && j.lighthouseResult.audits) || {};
         out.push({ url, score: cats && cats.performance ? Math.round(cats.performance.score * 100) : null, lcp: audits['largest-contentful-paint'] ? audits['largest-contentful-paint'].displayValue : '', cls: audits['cumulative-layout-shift'] ? audits['cumulative-layout-shift'].displayValue : '', tbt: audits['total-blocking-time'] ? audits['total-blocking-time'].displayValue : '', error: j.error ? j.error.message : '' });
       } catch (e) { out.push({ url, score: null, error: String(e && e.message || e) }); }
+    }
+    if (currentCrawl) {
+      const byUrl = new Map(out.map((r) => [r.url, r]));
+      for (const p of currentCrawl.pages) { const r = byUrl.get(p.address); if (r && typeof r.score === 'number') { p.psiScore = r.score; p.psiLcp = r.lcp; p.psiCls = r.cls; p.psiTbt = r.tbt; p.filters = (p.filters || []).filter((f) => !f.startsWith('psi-')).concat(['psi-all', r.score >= 90 ? 'psi-good' : r.score >= 50 ? 'psi-ni' : 'psi-poor']); } }
     }
     return out;
   });

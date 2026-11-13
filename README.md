@@ -23,17 +23,26 @@ brand green (#00C852) as the accent colour.
   Analytics, Search Console, Accessibility, Spelling, plus a Compare view.
   The "…" button opens **Configure Tabs** (show/hide tabs, Reset Tabs;
   persisted). Tabs scroll horizontally when they overflow.
-  *Note: the Meta Keywords tab from v1 was removed in v2 at the user's
-  request; the raw `metaKeywords` field is still stored in crawl records.*
-- **Toolbar:** filter dropdown (shows the active filter name), grid/tree
+  *Meta Keywords is not supported: there is no tab, filter or column, and
+  since v2.1 the crawler no longer collects the tag at all.*
+  **Clicking any main tab** switches the right sidebar to Overview,
+  scrolls to that tab's section, highlights its "All" row and draws the
+  section chart (v2.1).
+- **Toolbar:** filter dropdown (shows the active filter name), an
+  "Internal & External / Internal / External" dropdown on the Response
+  Codes tab, grid/tree
   view toggle (tree groups rows by directory), Export, centred Search, and
   a columns show/hide popup.
 - **Grid:** numbered rows (1, 2, 3, …), Screaming-Frog-style column sets per
   tab, "No data" placeholder, rows stream in live during a crawl, and a
   "Selected Cells: N  Filter Total: N" line under the grid.
-- **Bottom pane:** URL Details / Inlinks / Outlinks / Images (with preview
-  pane + Zoom) / Resources / HTTP Headers / Rendered Text / SERP Snippet
-  (Google-style snippet preview).
+- **Bottom pane (v2.1):** URL Details, Inlinks, Outlinks (both with Alt
+  Text, Target, Rel, Link Position and link-type / position filters), Image
+  Details (preview, zoom, alt, real vs attribute dimensions), Resources,
+  SERP Snippet (with length / pixel truncation), Rendered Page, Chrome
+  Console Log, View Source (when Store HTML is on), HTTP Headers, Cookies
+  (parsed attributes), Duplicate Details (exact + near duplicates with
+  similarity %), Structured Data Details, Spelling & Grammar, Accessibility.
 - **Right sidebar tabs:** Overview, Issues, Site Structure, Segments,
   Response Times, API, Spelling.
   - *Overview:* Summary rows (Total URLs Encountered, blocked by robots.txt,
@@ -47,8 +56,9 @@ brand green (#00C852) as the accent colour.
     for other sections).
   - *Issues:* chips [Issues][Warnings][Opportunities][Total] that filter
     the table (Issue Name | Issue Type | Issue Priority | URLs | % of
-    Total), a details pane with a real description per issue, and
-    double-click to filter the grid to the affected URLs.
+    Total) with type and priority icons. Clicking an issue filters the grid
+    to the affected URLs and shows **Issue Details** with a **Description**
+    and **How To Fix** for every one of the 84 issues; Copy copies both.
   - *Site Structure:* directory aggregation table + Crawl Depth stacked bar
     chart (Blocked by robots.txt / No Response / 2xx / 3xx / 4xx / 5xx)
     with View and Max Level controls.
@@ -58,13 +68,40 @@ brand green (#00C852) as the accent colour.
   - *API:* PageSpeed Insights - with an API key saved in Configuration it
     fetches live performance score / LCP / CLS / TBT for crawled HTML URLs.
   - *Spelling:* spelling/grammar summary from the built-in spell check.
-- **Footer:** "Spider Mode: Idle/Active" (left) and
-  "N of M (NN%) R Remaining" (right).
+- **Footer:** "Spider Mode: Idle/Active" (left), "Average: N URL/s.
+  Current: N URL/s." (centre) and "Completed N of M (100%) 0 Remaining"
+  (right).
 
 ## Crawl engine
 
-- **Modes (Mode menu, radio):** Spider, List, SERP (URLs crawled without
-  following; use the SERP Snippet bottom pane), Compare.
+- **Modes (Mode menu, radio):** Spider, List, SERP and Compare.
+  *SERP mode* crawls nothing: paste or upload URL, Title, Description rows
+  (CSV or tab-separated) and the Page Titles / Meta Description tabs,
+  filters, issues and SERP Snippet pane show lengths, pixel widths and
+  truncation. *Compare mode* compares the current crawl with a previous
+  saved crawl filter by filter (Current, Previous, Change, Added, New,
+  Removed, Missing; click a number to list the URLs) plus changed fields.
+- **Configuration menu** lists every section directly (Spider > Crawl /
+  Extraction / Limits / Rendering / Advanced / Preferences, Content >
+  Content Area / Duplicates / Spelling & Grammar, robots.txt, URL Rewriting,
+  CDNs, Include, Exclude, Speed, User-Agent, HTTP Header, Custom, API
+  Access, Authentication, Segments, Crawl Analysis, Profiles).
+- **Spider > Crawl options (v2.1, Screaming Frog defaults):** separate
+  Images / CSS / JavaScript resource switches, Follow Internal and External
+  "nofollow" (off by default, so nofollow links are recorded but not
+  crawled), Crawl Canonicals (on), Pagination, Hreflang and AMP (off),
+  Iframes and Meta Refresh (on). Store HTML (Extraction) enables View
+  Source.
+- **Content Area (v2.1):** CSS selectors to include / exclude (default
+  excludes nav and footer) before word count, readability, spelling,
+  grammar and duplicate checks.
+- **Custom Link Positions (v2.1):** every link is tagged Navigation,
+  Header, Footer, Sidebar or Content from its ancestor elements; custom
+  "Name | text" rules run first.
+- **Forms Based authentication (v2.1):** opens the login page, fills the
+  form that has a password field (keeping hidden CSRF fields), submits it
+  and reuses the session cookies for the whole crawl. The password is stored
+  encrypted with the OS keychain (safeStorage).
 - **Scope** controls what counts as internal: Subdomain = the start URL's
   own host (www-insensitive, port-aware); Subfolder = the start path
   subtree; All Subdomains = any subdomain of the registrable domain;
@@ -81,7 +118,7 @@ brand green (#00C852) as the accent colour.
   /sitemap_index.xml, one index level) with in-sitemap / orphan /
   non-indexable classification.
 - Redirects followed with full chains; chains and loops detected.
-- **Filter registry:** 208 named filters (single source of truth) drive the
+- **Filter registry:** 237 named filters (single source of truth) drive the
   sidebar counts, grid filtering and exports, so they always agree.
 - **Issues catalogue:** every issue carries an SF-style type
   (Issue / Warning / Opportunity) and priority (High / Medium / Low).
@@ -96,8 +133,16 @@ brand green (#00C852) as the accent colour.
 - **Spelling:** bundled ~16,700-word English list (generated by
   `npm run wordlist` from local text corpora + a curated core, with a
   common-misspellings denylist); unknown-token counts per page feed the
-  Content filters and the Spelling tab. **Grammar is not checked** (counts
-  stay 0 - a language-tool integration would be required; nothing is faked).
+  Content filters and the Spelling tab.
+- **Grammar (v2.1):** built-in conservative rules (repeated words, a/an,
+  "could of", lowercase sentence starts, missing space after punctuation).
+  Not a full grammar engine like LanguageTool.
+- **Accessibility (v2.1):** static WCAG checks per HTML page (page
+  language, document title, image alt, link / button names, form labels,
+  duplicate IDs, empty headings, iframe titles, zoom disabled, positive
+  tabindex, skipped heading levels) with an Accessibility tab, Overview
+  section, issues and an Accessibility Violations report. No colour
+  contrast or rendered checks.
 - **JavaScript rendering mode** (Configuration > Spider > Rendering):
   rendered-vs-raw differences for title, canonical, meta description and
   H1 feed the JavaScript tab; blocked resources are recorded. Text-only
@@ -116,7 +161,8 @@ brand green (#00C852) as the accent colour.
   Inspection, Issues). **Reports** menu generates real files: Crawl
   Overview (HTML), Redirect Chains, Redirects, Orphan Pages, SERP Summary,
   Canonical Errors, Insecure Content, Structured Data, HTTP Headers,
-  Cookies (from Set-Cookie headers collected during the crawl).
+  Cookies (from Set-Cookie headers collected during the crawl),
+  Accessibility Violations.
 - **Sitemaps** menu: XML + Image sitemap generation with
   priority/changefreq/lastmod options. **Visualisations** window: Crawl
   Tree (radial), Directory Tree, Force Directed. **Crawl Analysis >
@@ -129,8 +175,8 @@ brand green (#00C852) as the accent colour.
 
 ## Tests
 
-    npm test          # unit + fixture-server integration tests (30 tests)
-    npm run test:app  # Electron GUI smoke test (59 checks; needs Xvfb/display)
+    npm test          # unit + fixture-server integration tests (38 tests)
+    npm run test:app  # Electron GUI smoke test (81 checks; needs a display)
     npm run live      # live crawl of https://mdimrankhan.com capped at 200 URLs
 
 ## Build installers
@@ -160,9 +206,9 @@ regenerate all sizes (PNG, ICO, ICNS, iconset) with `npm run icons`
 - AI provider integrations (OpenAI, Gemini, Anthropic, Ollama) and backlink
   APIs (Ahrefs / Moz / Majestic) - config fields are stored-only.
 - Log file analysis mode.
-- Real grammar checking (see Spelling above; grammar counts stay 0).
-- Web Form authentication (fields stored; automated form login not
-  implemented - use Basic auth or cookies).
+- A full grammar engine (only the built-in rules above) and colour-contrast
+  accessibility checks.
+- Web Form login for JavaScript-only login forms or multi-step / 2FA logins.
 - The "Broken Bookmarks" URL filter (fragment targets cannot be verified
   from crawl data alone; it currently matches nothing).
 - "URL: Internal Search" / hash-style checks are basic pattern checks.

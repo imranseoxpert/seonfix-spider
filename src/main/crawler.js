@@ -6,13 +6,13 @@
  * once and never followed, cookies, sitemap discovery + orphan detection,
  * Link Score, image natural-size sniffing, filter-registry finalisation. */
 const { parseRobots, isAllowed } = require('./robots');
-const { parsePage, simhashSimilarity } = require('./extract');
+const { parsePage, simhashSimilarity, SECURITY_HEADERS } = require('./extract');
 const { buildFilterContext, applyFilters, summariseIssues, categoryOf } = require('./filters');
 const { buildAnalysis } = require('./analysis');
 const { normalizeUrl, ensureUrl, classifyInternal, crawlDepthOf, shouldInclude, originOf, registrableDomain } = require('./urlutil');
 
 const UA_PRESETS = {
-  spider: 'SeonfixSpider/2.0 (Seonfix Spider; +https://seonfix.com/spider)',
+  spider: 'SeonfixSpider/2.1 (Seonfix Spider; +https://seonfix.com/spider)',
   chrome: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   googlebot: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
   'googlebot-smartphone': 'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
@@ -32,6 +32,14 @@ const DEFAULT_CONFIG = {
   contentAreaPct: 100, basicAuth: null, cdnPatterns: [],
   urlRewrites: [], pagespeedKey: '',
   timeoutMs: 15000, maxRedirects: 10,
+  // v2.1 Spider > Crawl options (Screaming Frog defaults)
+  crawlImages: true, crawlCss: true, crawlJs: true,
+  followInternalNofollow: false, followExternalNofollow: false,
+  crawlCanonicals: true, crawlPagination: false, crawlHreflang: false, crawlAmp: false,
+  followMetaRefresh: true, crawlIframes: true,
+  storeHtml: false, grammarCheck: true,
+  contentArea: { include: [], exclude: ['nav', 'footer'] },
+  linkPositions: [], formAuth: null,
 };
 
 function analyseChain(chain) {
@@ -75,6 +83,10 @@ function generateImageSitemap(pages, opts = {}) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n${body}\n</urlset>\n`;
 }
 
+/* Compare mode (SF model): for every filter, how many URLs are in it now
+ * and before, split into Added (URL existed before but was not in this
+ * filter), New (URL not in the previous crawl at all), Removed (URL still
+ * exists but left this filter) and Missing (URL no longer in the crawl). */
 function compareCrawls(a, b) {
   const ma = new Map((a.pages || []).map((p) => [p.address, p]));
   const mb = new Map((b.pages || []).map((p) => [p.address, p]));
@@ -83,14 +95,24 @@ function compareCrawls(a, b) {
   const changed = [];
   for (const [u, pa] of ma) {
     const pb = mb.get(u); if (!pb) continue;
-    const fields = ['statusCode', 'title', 'metaDescription', 'wordCount', 'indexability'];
-    const diffs = fields.filter((f) => String(pa[f] ?? '') !== String(pb[f] ?? '')).map((f) => ({ field: f, before: pa[f] ?? '', after: pb[f] ?? '' }));
+    const fields = ['statusCode', 'title', 'metaDescription', 'wordCount', 'indexability', 'canonical', 'h1'];
+    const val = (p, f) => (f === 'h1' ? (p.h1s || [])[0] : p[f]);
+    const diffs = fields.filter((f) => String(val(pa, f) ?? '') !== String(val(pb, f) ?? '')).map((f) => ({ field: f === 'h1' ? 'H1-1' : f, before: val(pa, f) ?? '', after: val(pb, f) ?? '' }));
     if (diffs.length) changed.push({ address: u, diffs });
   }
   const ia = new Map((a.issues || []).map((i) => [i.name, i.count]));
   const ib = new Map((b.issues || []).map((i) => [i.name, i.count]));
   const issueDeltas = [...new Set([...ia.keys(), ...ib.keys()])].map((name) => ({ name, before: ia.get(name) || 0, after: ib.get(name) || 0, delta: (ib.get(name) || 0) - (ia.get(name) || 0) }));
-  return { added, removed, changed, issueDeltas };
+  const { FILTER_META } = require('./filters');
+  const filterDeltas = FILTER_META.map((f) => {
+    const prev = new Set((a.pages || []).filter((p) => (p.filters || []).includes(f.id)).map((p) => p.address));
+    const cur = new Set((b.pages || []).filter((p) => (p.filters || []).includes(f.id)).map((p) => p.address));
+    const r = { id: f.id, section: f.section, name: f.name, tab: f.tab, current: cur.size, previous: prev.size, added: [], newUrls: [], removed: [], missing: [] };
+    for (const u of cur) if (!prev.has(u)) (ma.has(u) ? r.added : r.newUrls).push(u);
+    for (const u of prev) if (!cur.has(u)) (mb.has(u) ? r.removed : r.missing).push(u);
+    return r;
+  });
+  return { added, removed, changed, issueDeltas, filterDeltas };
 }
 
 /* Natural image dimensions from raw bytes (PNG / GIF / JPEG headers). */
@@ -271,7 +293,8 @@ class Crawler {
 
   reqHeaders(extra = {}) {
     const headers = { 'User-Agent': this.config.userAgent, Accept: 'text/html,application/xhtml+xml,*/*', ...this.config.headers, ...extra };
-    if (this.config.cookies) headers.Cookie = this.config.cookies;
+    const cookie = [this.config.cookies, this.authCookie].filter(Boolean).join('; ');
+    if (cookie) headers.Cookie = cookie;
     if (this.config.basicAuth && this.config.basicAuth.username) {
       headers.Authorization = 'Basic ' + Buffer.from(`${this.config.basicAuth.username}:${this.config.basicAuth.password || ''}`).toString('base64');
     }
@@ -338,34 +361,47 @@ class Crawler {
       page.headers = r.headers; page.cookies = r.cookies || []; page.contentType = r.headers['content-type'] || '';
       page.status = statusText(r.firstStatus);
       page.contentCategory = categoryOf(page);
+      // security headers are checked on every internal response (SF model), not just HTML
+      if (kind !== 'external' && /^https:/i.test(url)) page.missingSecurityHeaders = SECURITY_HEADERS.filter((h) => !r.headers[h]);
       if (r.chain.length && r.finalUrl !== url && kind !== 'external') this.enqueue(r.finalUrl, depth, 'page');
       const isHtmlType = /text\/html|xhtml/.test(page.contentType) || (!page.contentType && r.body.length && kind === 'page');
       if (isHtmlType && kind === 'page') {
         const html = r.body.toString('utf8');
         page.htmlLength = html.length;
-        const parsed = parsePage({ url, html, headers: r.headers, statusCode: r.status, extractors: cfg.extractors, searchRules: cfg.searchRules, spellCheck: cfg.spellCheck !== false });
+        const parsed = parsePage({ url, html, headers: r.headers, statusCode: r.status, extractors: cfg.extractors, searchRules: cfg.searchRules, spellCheck: cfg.spellCheck !== false, grammarCheck: cfg.grammarCheck !== false, contentArea: cfg.contentArea, linkPositions: cfg.linkPositions, storeHtml: !!cfg.storeHtml });
         Object.assign(page, parsed);
         page.rawTitle = parsed.title;
         page.contentCategory = 'HTML';
         // bad content type: parsed as HTML but served with a non-HTML type, or type missing
         page.badContentType = !page.contentType || !/text\/html|xhtml/.test(page.contentType);
-        if (page.metaRefresh && page.metaRefresh.url && cfg.mode === 'spider') this.enqueue(page.metaRefresh.url, depth + 1, 'page');
-        if (page.ampUrl) { /* recorded; target flagged at finalise */ }
         if (cfg.mode === 'spider' && cfg.scope !== 'exact') {
+          const inDepth = !cfg.maxDepth || depth + 1 <= cfg.maxDepth;
+          const follow = (u) => { if (this.isInternalUrl(u)) { if (inDepth) this.enqueue(u, depth + 1, 'page'); } else if (cfg.crawlExternal) this.enqueue(u, depth + 1, 'external'); };
+          if (page.metaRefresh && page.metaRefresh.url && cfg.followMetaRefresh !== false) follow(page.metaRefresh.url);
           for (const link of parsed.links) {
             if (this.isInternalUrl(link.url)) {
-              if (!cfg.maxDepth || depth + 1 <= cfg.maxDepth) this.enqueue(link.url, depth + 1, 'page');
-            } else if (cfg.crawlExternal) this.enqueue(link.url, depth + 1, 'external');
+              if (!link.follow && !cfg.followInternalNofollow) continue;
+              if (inDepth) this.enqueue(link.url, depth + 1, 'page');
+            } else if (cfg.crawlExternal && (link.follow || cfg.followExternalNofollow)) this.enqueue(link.url, depth + 1, 'external');
           }
+          if (cfg.crawlCanonicals !== false) for (const c of parsed.canonicals || []) follow(c);
+          if (cfg.crawlPagination) for (const u of [...(parsed.paginationAll.next || []), ...(parsed.paginationAll.prev || [])]) follow(u);
+          if (cfg.crawlHreflang) for (const h of parsed.hreflang || []) follow(h.url);
+          if (cfg.crawlAmp && parsed.ampUrl) follow(parsed.ampUrl);
+          if (cfg.crawlIframes !== false) for (const u of parsed.iframes || []) follow(u);
           if (cfg.crawlResources) {
-            for (const res of parsed.resources) this.enqueue(res.url, depth + 1, this.isInternalUrl(res.url) ? 'resource' : 'external');
-            for (const img of parsed.images) this.enqueue(img.url, depth + 1, this.isInternalUrl(img.url) ? 'resource' : 'external');
+            for (const res of parsed.resources) {
+              if (res.type === 'JavaScript' && cfg.crawlJs === false) continue;
+              if (res.type === 'CSS' && cfg.crawlCss === false) continue;
+              this.enqueue(res.url, depth + 1, this.isInternalUrl(res.url) ? 'resource' : 'external');
+            }
+            if (cfg.crawlImages !== false) for (const img of parsed.images) this.enqueue(img.url, depth + 1, this.isInternalUrl(img.url) ? 'resource' : 'external');
           }
-        }
+        } else if (page.metaRefresh && page.metaRefresh.url && cfg.mode === 'spider' && cfg.followMetaRefresh !== false) this.enqueue(page.metaRefresh.url, depth + 1, 'page');
         // image natural sizes + incorrectly-sized detection (fetched bytes are
         // reused when the image is also crawled as a resource row; here we
         // only HEAD/GET small images when checkImageSizes is on)
-        if (cfg.crawlResources && cfg.checkImageSizes) {
+        if (cfg.crawlResources && cfg.crawlImages !== false && cfg.checkImageSizes) {
           for (const img of parsed.images) {
             const info = await this.imageInfoFor(img.url);
             if (info) { img.size = info.size; if (info.width) { img.naturalWidth = info.width; img.naturalHeight = info.height; if (img.width && img.height) { const aw = Number(img.width), ah = Number(img.height); if (aw && ah && (Math.abs(aw - info.width) / info.width > 0.1 || Math.abs(ah - info.height) / info.height > 0.1)) img.incorrectlySized = true; } } }
@@ -394,6 +430,45 @@ class Crawler {
       this.imageInfo.set(url, info);
       return info;
     } catch (_) { const info = { size: 0 }; this.imageInfo.set(url, info); return info; }
+  }
+
+  /* Configuration > Authentication > Web Form: load the login page, fill the
+   * form that has a password field (keeping hidden fields such as CSRF
+   * tokens), submit it and keep the session cookies for the whole crawl. */
+  async formLogin() {
+    const fa = this.config.formAuth || {};
+    if (!fa.url || !fa.username) return null;
+    const jar = new Map();
+    const keep = (resp) => {
+      let list = [];
+      try { list = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : []; } catch (_) {}
+      for (const c of list) { const pair = String(c).split(';')[0]; const i = pair.indexOf('='); if (i > 0) jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim()); }
+    };
+    const cookieHeader = () => [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    const base = { 'User-Agent': this.config.userAgent, ...this.config.headers };
+    const r1 = await fetch(fa.url, { headers: base, redirect: 'follow', signal: AbortSignal.timeout(this.config.timeoutMs) });
+    keep(r1);
+    const html = await r1.text();
+    const cheerio = require('cheerio');
+    const $ = cheerio.load(html);
+    let form = $('form').filter((_, f) => $(f).find('input[type="password" i]').length > 0).first();
+    if (!form.length) form = $('form').first();
+    if (!form.length) throw new Error('Web Form login: no form found on ' + fa.url);
+    const fields = new URLSearchParams();
+    form.find('input[name]').each((_, el) => { const t = String($(el).attr('type') || '').toLowerCase(); if (['submit', 'button', 'image', 'checkbox', 'radio'].includes(t)) return; fields.set($(el).attr('name'), $(el).attr('value') || ''); });
+    const userField = fa.userField || form.find('input[type="email" i][name], input[type="text" i][name], input:not([type])[name]').first().attr('name') || 'username';
+    const passField = fa.passField || form.find('input[type="password" i][name]').first().attr('name') || 'password';
+    fields.set(userField, fa.username); fields.set(passField, fa.password || '');
+    const action = normalizeUrl(form.attr('action') || r1.url || fa.url, r1.url || fa.url) || fa.url;
+    let resp = await fetch(action, { method: 'POST', redirect: 'manual', headers: { ...base, 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader() }, body: fields.toString(), signal: AbortSignal.timeout(this.config.timeoutMs) });
+    keep(resp);
+    for (let i = 0; i < 5 && resp.status >= 300 && resp.status < 400 && resp.headers.get('location'); i++) {
+      resp = await fetch(normalizeUrl(resp.headers.get('location'), action), { redirect: 'manual', headers: { ...base, Cookie: cookieHeader() }, signal: AbortSignal.timeout(this.config.timeoutMs) });
+      keep(resp);
+    }
+    this.authCookie = cookieHeader();
+    this.loginResult = { status: resp.status, cookies: jar.size };
+    return this.loginResult;
   }
 
   emitPage(page) { if (this.hooks.onPage) { try { this.hooks.onPage(page); } catch (_) {} } }
@@ -428,6 +503,9 @@ class Crawler {
   async crawl(seeds, rootUrl) {
     this.rootUrl = rootUrl || seeds[0];
     const cfg = this.config;
+    if (cfg.formAuth && cfg.formAuth.url && cfg.formAuth.username) {
+      try { await this.formLogin(); } catch (e) { this.loginResult = { error: String(e && e.message || e) }; }
+    }
     if (cfg.mode === 'sitemap') {
       const xml = await (await fetch(seeds[0], { headers: this.reqHeaders(), signal: AbortSignal.timeout(cfg.timeoutMs) })).text();
       const urls = parseSitemap(xml);
@@ -478,7 +556,7 @@ class Crawler {
     const { issues, analysis, stats } = finalizeCrawl(pages, this.rootUrl, this.config);
     stats.durationMs = Date.now() - this.startedAt;
     const { FILTER_META } = require('./filters');
-    return { app: 'Seonfix Spider', version: 2, startedAt: new Date(this.startedAt).toISOString(), rootUrl: this.rootUrl, mode: this.config.mode, scope: this.config.scope, pages, issues, stats, analysis, sitemaps: this.sitemapList, filterMeta: FILTER_META };
+    return { app: 'Seonfix Spider', version: 2, startedAt: new Date(this.startedAt).toISOString(), rootUrl: this.rootUrl, mode: this.config.mode, scope: this.config.scope, pages, issues, stats, analysis, sitemaps: this.sitemapList, filterMeta: FILTER_META, login: this.loginResult || null };
   }
 }
 

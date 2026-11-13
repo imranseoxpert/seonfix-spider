@@ -61,11 +61,12 @@ const count = (fin, filterId) => fin.pages.filter((p) => (p.filters || []).inclu
 test('filter registry: counts match independent predicates (14 filters)', () => {
   const fin = fixture(); const crawl = fin;
   const pages = crawl.pages;
-  const isHtml200 = (p) => p.contentCategory === 'HTML' && p.statusCode >= 200 && p.statusCode < 300;
+  // on-page filters cover internal URLs only (externals are status-checked, never parsed)
+  const isHtml200 = (p) => !p.external && p.contentCategory === 'HTML' && p.statusCode >= 200 && p.statusCode < 300;
   const checks = {
     'title-missing': (p) => isHtml200(p) && !p.title,
     'desc-missing': (p) => isHtml200(p) && !p.metaDescription,
-    'title-duplicate': (p) => !!p.title && pages.filter((q) => q.title && q.title.toLowerCase() === p.title.toLowerCase()).length > 1,
+    'title-duplicate': (p) => !p.external && !!p.title && pages.filter((q) => q.title && q.title.toLowerCase() === p.title.toLowerCase()).length > 1,
     'sec-hsts': (p) => /^https:/i.test(p.address) && p.statusCode > 0 && (p.missingSecurityHeaders || []).includes('strict-transport-security'),
     'url-uppercase': (p) => /[A-Z]/.test(new URL(p.address).pathname),
     'url-underscores': (p) => new URL(p.address).pathname.includes('_'),

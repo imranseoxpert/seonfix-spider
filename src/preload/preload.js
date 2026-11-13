@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('spider', {
   configGet: call('config:get'),
   configSave: call('config:save'),
   crawlStart: call('crawl:start'),
+  serpAnalyse: call('serp:analyse'),
   crawlPause: call('crawl:pause'),
   crawlResume: call('crawl:resume'),
   crawlStop: call('crawl:stop'),

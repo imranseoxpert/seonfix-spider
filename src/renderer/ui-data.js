@@ -1,8 +1,8 @@
 'use strict';
-/* Tab + column definitions for the v2 workspace.
- * NOTE (per user narration): there is deliberately NO Meta Keywords tab. */
+/* Tab + column definitions for the v2 workspace. Meta Keywords is not
+ * collected or shown (removed in v2.1 at the user's request). */
 const C = (key, label, get, num) => ({ key, label, get: get || ((p) => p[key]), num: !!num });
-const HTMLP = (p) => p.contentCategory === 'HTML';
+const HTMLP = (p) => p.contentCategory === 'HTML' && !p.external;
 const occ = (map) => (p, cx, val) => val ? (map(cx).get(String(val).toLowerCase()) || 0) : 0;
 
 const INTERNAL_COLS = [
@@ -19,6 +19,9 @@ const INTERNAL_COLS = [
   C('outlinks', 'Outlinks', null, true), C('uniqueOutlinks', 'Unique Outlinks', null, true), C('externalOutlinks', 'External Outlinks', null, true),
   C('linkScore', 'Link Score', null, true), C('hash', 'Hash'),
 ];
+
+const A11Y_DEFS = [['html-lang', 'Missing Language'], ['document-title', 'Missing Title'], ['image-alt', 'Image Alt Missing'], ['link-name', 'Links No Text'], ['button-name', 'Buttons No Text'], ['label', 'Fields No Label'], ['duplicate-id', 'Duplicate IDs'], ['empty-heading', 'Empty Headings'], ['frame-title', 'Iframes No Title'], ['meta-viewport', 'Zoom Disabled'], ['tabindex', 'Positive Tabindex'], ['skipped-heading', 'Skipped Headings']];
+const A11Y_COLS = A11Y_DEFS.map(([id, label]) => C('a11y_' + id, label, (p) => ((p.a11y || {})[id] || {}).count || 0, true));
 
 const SF_TABS = [
   { id: 'internal', label: 'Internal', rows: (cr) => cr.pages.filter((p) => !p.external), columns: INTERNAL_COLS },
@@ -41,13 +44,13 @@ const SF_TABS = [
   { id: 'amp', label: 'AMP', rows: (cr) => cr.pages.filter((p) => p.ampUrl || p.isAmp), columns: [C('address', 'Address'), C('ampUrl', 'AMP URL'), C('isAmp', 'Is AMP', (p) => (p.isAmp ? 'Yes' : 'No')), C('statusCode', 'Status Code', null, true), C('canonical', 'Canonical 1')] },
   { id: 'structured', label: 'Structured Data', rows: (cr) => cr.pages.filter(HTMLP), columns: [C('address', 'Address'), C('types', 'Types', (p) => (p.structuredData || []).join(', ')), C('items', 'Items', (p) => (p.sdItems || []).length, true), C('warnings', 'Warnings', (p) => (p.sdWarnings || []).join('; ')), C('statusCode', 'Status Code', null, true)] },
   { id: 'sitemaps', label: 'Sitemaps', rows: (cr) => cr.pages, columns: [C('address', 'Address'), C('inSitemap', 'In Sitemap', (p) => (p.inSitemap ? 'Yes' : 'No')), C('sitemapOnly', 'Sitemap Only (Orphan)', (p) => (p.sitemapOnly ? 'Yes' : 'No')), C('statusCode', 'Status Code', null, true), C('indexability', 'Indexability'), C('title', 'Title 1')] },
-  { id: 'pagespeed', label: 'PageSpeed', psiTab: true, columns: [C('url', 'Address'), C('score', 'Performance Score', null, true), C('lcp', 'LCP'), C('cls', 'CLS'), C('tbt', 'TBT'), C('error', 'Error')], note: 'PageSpeed data is fetched live from the API tab in the right sidebar. Add your PageSpeed API key in Configuration > API Access > PageSpeed first.' },
+  { id: 'pagespeed', label: 'PageSpeed', rows: (cr) => cr.pages.filter((p) => typeof p.psiScore === 'number'), columns: [C('address', 'Address'), C('psiScore', 'Performance Score', null, true), C('psiLcp', 'Largest Contentful Paint'), C('psiCls', 'Cumulative Layout Shift'), C('psiTbt', 'Total Blocking Time'), C('statusCode', 'Status Code', null, true), C('indexability', 'Indexability')], note: 'PageSpeed data is fetched from the API tab in the right sidebar. Add your PageSpeed API key in Configuration > API Access > PageSpeed Insights first.' },
   { id: 'search', label: 'Custom Search', rows: (cr) => cr.pages.filter((p) => p.searchMatches && Object.keys(p.searchMatches).length), columns: (cr) => { const keys = [...new Set(cr.pages.flatMap((p) => Object.keys(p.searchMatches || {})))]; return [C('address', 'Address'), ...keys.map((k) => C('cs_' + k, k, (p) => String((p.searchMatches || {})[k] ?? '')))]; }, note: 'Define rules in Configuration > Custom > Custom Search.' },
   { id: 'extraction', label: 'Custom Extraction', rows: (cr) => cr.pages.filter((p) => p.extractions && Object.keys(p.extractions).length), columns: (cr) => { const keys = [...new Set(cr.pages.flatMap((p) => Object.keys(p.extractions || {})))]; return [C('address', 'Address'), ...keys.map((k) => C('ex_' + k, k, (p) => (p.extractions || {})[k] || ''))]; }, note: 'Define extractors in Configuration > Custom > Custom Extraction.' },
   { id: 'analytics', label: 'Analytics', rows: () => [], columns: [C('address', 'Address')], note: 'Google Analytics connection requires OAuth, which is not yet connected. See Configuration > API Access > Google Analytics.' },
   { id: 'searchconsole', label: 'Search Console', rows: () => [], columns: [C('address', 'Address')], note: 'Search Console connection requires OAuth, which is not yet connected. See Configuration > API Access > Search Console.' },
-  { id: 'accessibility', label: 'Accessibility', rows: () => [], columns: [C('address', 'Address')], note: 'Accessibility auditing (AXE/WCAG) is not included in this version.' },
-  { id: 'spelling', label: 'Spelling', rows: (cr) => cr.pages.filter(HTMLP), columns: [C('address', 'Address'), C('spellingErrors', 'Spelling Errors', null, true), C('unknown', 'Possible Misspellings', (p) => (p.spellingUnknown || []).join(', ')), C('grammar', 'Grammar Errors', () => 0, true), C('wordCount', 'Word Count', null, true)] },
+  { id: 'accessibility', label: 'Accessibility', rows: (cr) => cr.pages.filter((p) => HTMLP(p) && p.a11y), columns: [C('address', 'Address'), C('a11yViolations', 'Total Violations', null, true), ...A11Y_COLS, C('htmlLang', 'HTML Lang'), C('indexability', 'Indexability')], note: 'Static WCAG checks on the page HTML (no colour-contrast or rendered checks).' },
+  { id: 'spelling', label: 'Spelling', rows: (cr) => cr.pages.filter((p) => HTMLP(p) && !p.external), columns: [C('address', 'Address'), C('spellingErrors', 'Spelling Errors', null, true), C('unknown', 'Possible Misspellings', (p) => (p.spellingUnknown || []).join(', ')), C('grammarErrors', 'Grammar Errors', null, true), C('grammarSamples', 'Grammar Issues', (p) => (p.grammarMatches || []).map((m) => m.text).join(' | ')), C('wordCount', 'Word Count', null, true), C('htmlLang', 'Language')] },
 ];
 if (typeof module !== 'undefined' && module.exports) module.exports = { SF_TABS, INTERNAL_COLS };
 if (typeof window !== 'undefined') { window.SF_TABS = SF_TABS; window.INTERNAL_COLS = INTERNAL_COLS; }

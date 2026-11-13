@@ -7,9 +7,10 @@
  * Also holds the Issues catalogue (SF model: type + priority + description),
  * where each issue is backed by a filter id. */
 const { classifyInternal } = require('./urlutil');
+const { A11Y_CHECKS } = require('./accessibility');
 
 const HTML = (p) => /text\/html|xhtml/.test(p.contentType || '') || (p.contentCategory === 'HTML');
-const isHtml200 = (p) => (p.finalStatusCode === 200 || p.statusCode === 200) && HTML(p) && !p.resourceOnly;
+const isHtml200 = (p) => ((p.finalStatusCode === 200 || p.statusCode === 200) && HTML(p) && !p.resourceOnly) || !!p.serpOnly;
 const LANG_RE = /^[a-z]{2,3}(-[a-zA-Z]{2,4})?$/;
 
 function countMap(pages, pick) {
@@ -129,7 +130,7 @@ const FILTERS = [
   F('rc-all', 'Response Codes', 'All', 'responses', () => true),
   F('rc-blocked-robots', 'Response Codes', 'Blocked by Robots.txt', 'responses', (p) => p.indexabilityReason === 'Blocked by robots.txt'),
   F('rc-blocked-resource', 'Response Codes', 'Blocked Resource', 'responses', (p) => (p.blockedResources || []).length > 0),
-  F('rc-no-response', 'Response Codes', 'No Response', 'responses', (p) => !p.statusCode && !p.external),
+  F('rc-no-response', 'Response Codes', 'No Response', 'responses', (p) => !p.statusCode && !p.sitemapOnly && !p.serpOnly && p.indexabilityReason !== 'Blocked by robots.txt'),
   F('rc-2xx', 'Response Codes', 'Success (2xx)', 'responses', sec200),
   F('rc-3xx', 'Response Codes', 'Redirection (3xx)', 'responses', (p) => p.statusCode >= 300 && p.statusCode < 400 && !p.metaRefresh),
   F('rc-3xx-js', 'Response Codes', 'Redirection (JavaScript)', 'responses', (p) => !!p.jsRedirect),
@@ -139,7 +140,7 @@ const FILTERS = [
   F('rc-int-all', 'Response Codes', 'Internal All', 'responses', (p) => !p.external),
   F('rc-int-blocked-robots', 'Response Codes', 'Internal Blocked by Robots.txt', 'responses', (p) => !p.external && p.indexabilityReason === 'Blocked by robots.txt'),
   F('rc-int-blocked-resource', 'Response Codes', 'Internal Blocked Resource', 'responses', (p) => !p.external && (p.blockedResources || []).length > 0),
-  F('rc-int-no-response', 'Response Codes', 'Internal No Response', 'responses', (p) => !p.external && !p.statusCode),
+  F('rc-int-no-response', 'Response Codes', 'Internal No Response', 'responses', (p) => !p.external && !p.statusCode && !p.sitemapOnly && !p.serpOnly && p.indexabilityReason !== 'Blocked by robots.txt'),
   F('rc-int-2xx', 'Response Codes', 'Internal Success (2xx)', 'responses', (p) => !p.external && sec200(p)),
   F('rc-int-3xx', 'Response Codes', 'Internal Redirection (3xx)', 'responses', (p) => !p.external && p.statusCode >= 300 && p.statusCode < 400 && !p.metaRefresh),
   F('rc-int-3xx-js', 'Response Codes', 'Internal Redirection (JavaScript)', 'responses', (p) => !p.external && !!p.jsRedirect),
@@ -206,7 +207,7 @@ const FILTERS = [
   F('content-low', 'Content', 'Low Content Pages', 'content', (p) => isHtml200(p) && (p.wordCount || 0) < 200),
   F('content-soft-404', 'Content', 'Soft 404 Pages', 'content', (p) => !!p.soft404),
   F('content-spelling', 'Content', 'Spelling Errors', 'content', (p) => (p.spellingErrors || 0) > 0),
-  F('content-grammar', 'Content', 'Grammar Errors', 'content', () => false),
+  F('content-grammar', 'Content', 'Grammar Errors', 'content', (p) => (p.grammarErrors || 0) > 0),
   F('content-read-difficult', 'Content', 'Readability Difficult', 'content', (p) => p.readability === 'Difficult'),
   F('content-read-very-difficult', 'Content', 'Readability Very Difficult', 'content', (p) => p.readability === 'Very Difficult'),
   F('content-lorem', 'Content', 'Lorem Ipsum Placeholder', 'content', (p) => !!p.loremIpsum),
@@ -318,6 +319,29 @@ const FILTERS = [
   F('sm-orphan', 'Sitemaps', 'Orphan URLs (In Sitemap, Not Crawled)', 'sitemaps', (p) => !!p.sitemapOnly),
   F('sm-nonindexable', 'Sitemaps', 'Non-Indexable In Sitemap', 'sitemaps', (p) => !!p.inSitemap && p.indexability !== 'Indexable'),
   F('sm-not-in-sitemap', 'Sitemaps', 'Indexable Not In Sitemap', 'sitemaps', (p) => p.indexability === 'Indexable' && !p.inSitemap && !p.sitemapOnly),
+  // ---- PageSpeed (filled once scores are fetched from the API sidebar tab) ----
+  F('psi-all', 'PageSpeed', 'All', 'pagespeed', (p) => typeof p.psiScore === 'number'),
+  F('psi-good', 'PageSpeed', 'Good (90-100)', 'pagespeed', (p) => typeof p.psiScore === 'number' && p.psiScore >= 90),
+  F('psi-ni', 'PageSpeed', 'Needs Improvement (50-89)', 'pagespeed', (p) => typeof p.psiScore === 'number' && p.psiScore >= 50 && p.psiScore < 90),
+  F('psi-poor', 'PageSpeed', 'Poor (0-49)', 'pagespeed', (p) => typeof p.psiScore === 'number' && p.psiScore < 50),
+  // ---- Custom Search / Custom Extraction ----
+  F('cs-all', 'Custom Search', 'All', 'search', (p) => !!p.searchMatches && Object.keys(p.searchMatches).length > 0),
+  F('cs-match', 'Custom Search', 'Pages With A Match', 'search', (p) => Object.values(p.searchMatches || {}).some(Boolean)),
+  F('cs-nomatch', 'Custom Search', 'Pages Without A Match', 'search', (p) => !!p.searchMatches && Object.keys(p.searchMatches).length > 0 && !Object.values(p.searchMatches).some(Boolean)),
+  F('ce-all', 'Custom Extraction', 'All', 'extraction', (p) => !!p.extractions && Object.keys(p.extractions).length > 0),
+  F('ce-has', 'Custom Extraction', 'With Extracted Data', 'extraction', (p) => Object.values(p.extractions || {}).some((v) => String(v || '').trim())),
+  F('ce-empty', 'Custom Extraction', 'Without Extracted Data', 'extraction', (p) => !!p.extractions && Object.keys(p.extractions).length > 0 && !Object.values(p.extractions).some((v) => String(v || '').trim())),
+  // ---- Analytics / Search Console (need a Google connection; stay empty until connected) ----
+  F('ga-all', 'Analytics', 'All', 'analytics', (p) => !!p.ga),
+  F('gsc-all', 'Search Console', 'All', 'searchconsole', (p) => !!p.gsc),
+  // ---- Accessibility (static WCAG checks) ----
+  F('a11y-all', 'Accessibility', 'All', 'accessibility', (p) => HTML(p) && !!p.a11y),
+  F('a11y-any', 'Accessibility', 'Pages With Violations', 'accessibility', (p) => (p.a11yViolations || 0) > 0),
+  ...A11Y_CHECKS.map((c) => F('a11y-' + c.id, 'Accessibility', c.name, 'accessibility', (p) => ((p.a11y || {})[c.id] || {}).count > 0)),
+  // ---- Spelling & Grammar ----
+  F('sg-all', 'Spelling & Grammar', 'All', 'spelling', (p) => HTML(p) && !p.external),
+  F('sg-spelling', 'Spelling & Grammar', 'Spelling Errors', 'spelling', (p) => (p.spellingErrors || 0) > 0),
+  F('sg-grammar', 'Spelling & Grammar', 'Grammar Errors', 'spelling', (p) => (p.grammarErrors || 0) > 0),
 ];
 
 const NONDESCRIPTIVE = new Set(['click here', 'here', 'this', 'link', 'read more', 'learn more', 'more', 'go', 'this link', 'page', 'website', 'article', 'info']);
@@ -353,11 +377,18 @@ function sdWarningsFor(p) {
   return out;
 }
 
+/* External URLs are only status-checked, never parsed, so (like Screaming
+ * Frog) they only appear in the Crawl Data External and Response Codes
+ * sections; every on-page section covers internal URLs only. */
+const EXTERNAL_SECTIONS = new Set(['Crawl Data External', 'Response Codes']);
 function applyFilters(pages, ctx) {
   for (const p of pages) {
     p.sdWarnings = sdWarningsFor(p);
     const matched = [];
-    for (const f of FILTERS) { try { if (f.test(p, ctx)) matched.push(f.id); } catch (_) {} }
+    for (const f of FILTERS) {
+      if (p.external && !EXTERNAL_SECTIONS.has(f.section)) continue;
+      try { if (f.test(p, ctx)) matched.push(f.id); } catch (_) {}
+    }
     p.filters = matched;
   }
 }
@@ -433,19 +464,137 @@ const ISSUES = [
   I('iss-sd-warnings', 'Structured Data: Validation Warnings', 'Warning', 'Low', 'sd-warnings', 'Pages whose structured data is missing commonly required properties for its type (basic checks only, not a full schema.org validation).'),
   I('iss-redirect', 'Redirect (3xx)', 'Warning', 'Low', 'rc-3xx', 'URLs answering with a 3xx redirect. Internal links should point directly at the final URL where possible.'),
   I('iss-nofollow-dir', 'Directives: Nofollow', 'Opportunity', 'Low', 'dir-nofollow', 'Pages carrying a nofollow directive, so crawlers will not follow their links.'),
+  I('iss-grammar', 'Content: Grammar Errors', 'Opportunity', 'Low', 'content-grammar', 'Pages where the built-in grammar rules found likely mistakes, such as repeated words, "a" before a vowel sound or a sentence starting in lowercase.'),
+  I('iss-h2-missing', 'H2: Missing', 'Opportunity', 'Low', 'h2-missing', 'Indexable pages with no H2 heading. Subheadings break content into scannable sections and help search engines understand its structure.'),
+  I('iss-h1-long', 'H1: Over 70 Characters', 'Opportunity', 'Low', 'h1-over-70', 'Pages whose first H1 is longer than 70 characters. Long headings are harder to scan and often dilute the page focus.'),
+  I('iss-desc-multiple', 'Meta Description: Multiple', 'Issue', 'Medium', 'desc-multiple', 'Pages with more than one meta description tag. Search engines may pick either one, or ignore both.'),
+  I('iss-can-relative', 'Canonicals: Canonical Is Relative', 'Opportunity', 'Low', 'can-relative', 'Pages whose canonical link uses a relative URL. Relative canonicals work but are easy to break and can point at the wrong host or protocol.'),
+  I('iss-can-unlinked', 'Canonicals: Unlinked', 'Opportunity', 'Low', 'can-unlinked', 'Canonical URLs that were only discovered through the canonical tag and are not linked anywhere else on the site.'),
+  I('iss-pg-non200', 'Pagination: Non-200 Pagination URLs', 'Warning', 'Medium', 'pg-non-200', 'Pages whose rel="next" or rel="prev" points at a URL that does not return a 200 status code.'),
+  I('iss-sm-nonindexable', 'Sitemaps: Non-Indexable URLs in Sitemap', 'Warning', 'Medium', 'sm-nonindexable', 'URLs listed in the XML sitemap that are not indexable (redirects, errors, noindex or canonicalised).'),
+  I('iss-sm-orphan', 'Sitemaps: Orphan URLs', 'Warning', 'Medium', 'sm-orphan', 'URLs listed in the XML sitemap that were not found by following internal links during the crawl.'),
+  I('iss-js-errors', 'JavaScript: Pages with JavaScript Errors', 'Warning', 'Medium', 'js-errors', 'Pages that logged JavaScript errors in the console while being rendered.'),
+  I('iss-a11y-lang', 'Accessibility: Missing Page Language', 'Issue', 'Medium', 'a11y-html-lang', 'Pages whose <html> element has no lang attribute, so screen readers cannot pick the right pronunciation.'),
+  I('iss-a11y-link-name', 'Accessibility: Links Without Discernible Text', 'Issue', 'Medium', 'a11y-link-name', 'Links with no text, aria-label, title or image alt text, so assistive technology cannot announce where they go.'),
+  I('iss-a11y-button-name', 'Accessibility: Buttons Without Discernible Text', 'Issue', 'Medium', 'a11y-button-name', 'Buttons with no visible text or accessible name.'),
+  I('iss-a11y-label', 'Accessibility: Form Fields Without Labels', 'Issue', 'Medium', 'a11y-label', 'Form inputs, selects and text areas that have no associated label, aria-label or title.'),
+  I('iss-a11y-duplicate-id', 'Accessibility: Duplicate ID Attributes', 'Warning', 'Low', 'a11y-duplicate-id', 'Pages where the same id attribute is used on more than one element, which can break labels and ARIA references.'),
+  I('iss-a11y-empty-heading', 'Accessibility: Empty Headings', 'Warning', 'Low', 'a11y-empty-heading', 'Heading elements with no text content, which confuse screen-reader heading navigation.'),
+  I('iss-a11y-frame-title', 'Accessibility: Iframes Without Title', 'Warning', 'Low', 'a11y-frame-title', 'Iframes with no title attribute describing their content.'),
+  I('iss-a11y-viewport', 'Accessibility: Zooming Disabled', 'Warning', 'Medium', 'a11y-meta-viewport', 'Pages whose viewport meta tag stops users from zooming (user-scalable=no or a low maximum-scale).'),
+  I('iss-a11y-tabindex', 'Accessibility: Positive Tabindex', 'Warning', 'Low', 'a11y-tabindex', 'Elements with a tabindex above 0, which overrides the natural keyboard focus order.'),
 ];
 
+/* "How To Fix" guidance shown under Issue Details (Issues sidebar tab). */
+const HOW_TO_FIX = {
+  'iss-4xx': 'Update internal links to point at a live URL, restore the page if it was removed by mistake, or 301 redirect the URL to the most relevant live page. Check Inlinks in the bottom pane to see which pages link to it.',
+  'iss-5xx': 'Check server logs and hosting resources at the time of the crawl. Re-crawl the URLs to confirm whether the errors are intermittent, and lower crawl speed if the server struggles under load.',
+  'iss-no-response': 'Confirm the URL resolves in a browser and that DNS, SSL and firewall or CDN settings are not blocking requests. Increase the request timeout in Configuration > Spider > Limits if the server is slow.',
+  'iss-redirect-loop': 'Follow the chain in the HTTP Headers tab and change the redirect rules so each URL redirects once, straight to a final URL that returns 200.',
+  'iss-title-multiple': 'Remove the extra <title> tags from the page HTML so the page has a single, concise and descriptive title in the <head>. Multiple titles usually come from conflicting plugins or theme templates.',
+  'iss-title-missing': 'Add a unique, descriptive <title> to every page that describes its main topic and includes its target keyword near the start.',
+  'iss-h1-missing': 'Add one H1 per page that clearly describes the page topic. It usually matches the main headline visitors see first.',
+  'iss-multiple-canonical': 'Output a single rel="canonical" link per page. Remove the duplicates, which usually come from an SEO plugin and the theme both adding one.',
+  'iss-img-missing-alt': 'Add short, descriptive alt text that says what the image shows. Use an empty alt only for purely decorative images.',
+  'iss-img-missing-alt-attr': 'Add an alt attribute to every <img>. Describe meaningful images and use alt="" for decorative ones so screen readers skip them.',
+  'iss-noindex': 'Review each URL. If it should rank, remove the noindex from the meta robots tag or X-Robots-Tag header. If it should stay out of the index, consider whether internal links to it are needed.',
+  'iss-no-outlinks': 'Add contextual internal links from these pages to related pages. If the links only appear after JavaScript runs, turn on JavaScript rendering (Configuration > Spider > Rendering) to check them.',
+  'iss-blocked-robots': 'Check the matching Disallow rule in robots.txt. Remove or narrow it if the URLs should be crawled and indexed, and avoid linking internally to URLs you intend to block.',
+  'iss-redirect-chain': 'Point each redirect, and every internal link, directly at the final destination URL so there is only one hop.',
+  'iss-title-duplicate': 'Write a unique title for each page. For template pages such as categories or pagination, add the distinguishing detail (category name, page number, location).',
+  'iss-title-long': 'Shorten the title to around 50-60 characters, keeping the most important words first so they survive truncation.',
+  'iss-title-short': 'Expand the title to describe the page better, for example by adding the product type, benefit or brand.',
+  'iss-title-below-200px': 'Lengthen the title so it uses more of the available space in search results with useful, relevant wording.',
+  'iss-title-over-580px': 'Shorten the title, or use narrower wording, so it fits within roughly 580 pixels and is not cut off.',
+  'iss-title-same-h1': 'Keep both relevant, but vary the wording so the title and H1 together cover more of the ways people search for the topic.',
+  'iss-desc-missing': 'Write a unique meta description of roughly 120-155 characters that summarises the page and gives a reason to click.',
+  'iss-desc-duplicate': 'Write a unique meta description for every important page, or leave templated pages without one rather than repeating the same text.',
+  'iss-desc-long': 'Trim the description to around 155 characters, putting the key message first.',
+  'iss-desc-short': 'Expand the description with a clear summary of the page and a call to action.',
+  'iss-desc-multiple': 'Remove the extra meta description tags so only one remains in the <head>.',
+  'iss-h1-duplicate': 'Give each page its own H1 that reflects its unique topic.',
+  'iss-h1-multiple': 'Keep one H1 for the main heading and change the others to H2 or lower to reflect the content hierarchy.',
+  'iss-h1-long': 'Shorten the H1 so it states the topic concisely.',
+  'iss-h2-missing': 'Break longer content into sections with descriptive H2 subheadings.',
+  'iss-h2-multiple': 'Multiple H2s are normal. Check they form a logical outline of the page and are not used purely for styling.',
+  'iss-h2-nonseq': 'Order headings logically: one H1 first, then H2s, then H3s within them, without skipping levels. Use CSS rather than heading tags for visual styling.',
+  'iss-h1-nonseq': 'Make sure the H1 comes before lower-level headings and that no heading levels are skipped.',
+  'iss-canonicalised': 'Check the canonical is intended. If the page should be indexed, make its canonical self-referencing. If not, update internal links to point at the canonical URL instead.',
+  'iss-can-missing': 'Add a self-referencing rel="canonical" link to each indexable page to consolidate duplicate URL variations such as tracking parameters.',
+  'iss-can-nonindexable': 'Point the canonical at the final, indexable 200 version of the URL rather than at a redirect, error or noindexed page.',
+  'iss-can-relative': 'Use absolute URLs, including protocol and host, in canonical link elements.',
+  'iss-can-unlinked': 'Link to the canonical URL internally, or check whether the canonical is pointing at the wrong URL.',
+  'iss-exact-dup': 'Consolidate duplicates with a 301 redirect or a canonical to the preferred URL, or make each page substantially different.',
+  'iss-near-dup': 'Review the matching pages (Duplicate Details in the bottom pane). Merge, canonicalise or rewrite them so each page has distinct value.',
+  'iss-low-content': 'Expand thin pages with useful, original content, or noindex or merge pages that have no unique purpose.',
+  'iss-soft-404': 'Return a real 404 or 410 status code for pages that no longer exist, or restore meaningful content if the page should exist.',
+  'iss-lorem': 'Replace the placeholder text with real copy before the page is published or indexed.',
+  'iss-readability': 'Use shorter sentences, simpler words and more subheadings and lists to make the content easier to read.',
+  'iss-spelling': 'Review the flagged words in the Spelling & Grammar tab of the bottom pane and fix genuine mistakes. Brand and technical terms can be ignored.',
+  'iss-grammar': 'Review the flagged phrases in the Spelling & Grammar tab of the bottom pane and correct them in the page copy.',
+  'iss-orphan': 'Link to orphan pages from relevant internal pages, or remove them from the sitemap and redirect them if they are no longer needed.',
+  'iss-unsafe-xorigin': 'Add rel="noopener" (or rel="noreferrer") to links that use target="_blank" and point at another origin.',
+  'iss-hsts': 'Send a Strict-Transport-Security header (for example max-age=31536000; includeSubDomains) from the server or CDN on all HTTPS responses.',
+  'iss-csp': 'Define a Content-Security-Policy header that lists the trusted sources for scripts, styles and other resources. Start in report-only mode to avoid breaking the site.',
+  'iss-xfo': 'Send X-Frame-Options: SAMEORIGIN (or a CSP frame-ancestors rule) so other sites cannot frame the pages.',
+  'iss-xcto': 'Send X-Content-Type-Options: nosniff on all responses.',
+  'iss-referrer': 'Send a Referrer-Policy header such as strict-origin-when-cross-origin.',
+  'iss-bad-ct': 'Configure the server to send the correct Content-Type header (for HTML pages: text/html; charset=UTF-8).',
+  'iss-mixed': 'Change http:// resource URLs to https:// (or protocol-relative to https) and make sure every resource is available over HTTPS.',
+  'iss-insecure': 'Move the site to HTTPS, 301 redirect HTTP URLs to their HTTPS versions and update internal links.',
+  'iss-high-ext-out': 'Review the external links and remove ones that are not useful to visitors.',
+  'iss-high-depth': 'Link to important deep pages from higher-level pages such as the homepage, category pages or navigation, so they are reachable in fewer clicks.',
+  'iss-nondesc-anchor': 'Replace generic anchors with text that describes the destination page, for example "SEO audit pricing" rather than "click here".',
+  'iss-no-anchor': 'Add descriptive anchor text, or alt text on the image inside the link, so the link destination is clear.',
+  'iss-img-oversized': 'Compress the image, serve modern formats such as WebP or AVIF, and size it to the dimensions it is displayed at.',
+  'iss-img-size-attrs': 'Add width and height attributes to images so the browser can reserve space and avoid layout shift.',
+  'iss-img-alt-long': 'Shorten alt text to a concise description of the image, under about 100 characters.',
+  'iss-url-long': 'Use shorter, readable URLs with only the key words. Redirect old URLs if you change them.',
+  'iss-url-uppercase': 'Use lowercase URLs, and 301 redirect uppercase variants to the lowercase version.',
+  'iss-url-underscore': 'Use hyphens to separate words in new URLs. Only change existing URLs if you can redirect them.',
+  'iss-url-nonascii': 'Use ASCII characters in URLs where possible, or make sure the encoded form is used consistently in links.',
+  'iss-url-params': 'Avoid linking internally to parameter variations, and use canonicals for parameters that do not change the content.',
+  'iss-hreflang': 'Make sure every hreflang target links back with a matching hreflang annotation, uses valid ISO language and region codes, and points at indexable canonical URLs.',
+  'iss-sd-warnings': 'Add the missing recommended properties to the structured data and validate it with Google\'s Rich Results Test.',
+  'iss-redirect': 'Update internal links to point directly at the final destination URL instead of the redirecting URL.',
+  'iss-nofollow-dir': 'Remove the nofollow directive if crawlers should follow the links on these pages.',
+  'iss-pg-non200': 'Point rel="next" and rel="prev" at live, 200 status pagination URLs.',
+  'iss-sm-nonindexable': 'List only indexable, canonical URLs that return 200 in the XML sitemap.',
+  'iss-sm-orphan': 'Link to these URLs from relevant internal pages, or remove them from the sitemap if they should not be indexed.',
+  'iss-js-errors': 'Open the Chrome Console Log tab in the bottom pane and fix the errors, prioritising any that stop content or links from rendering.',
+  'iss-a11y-lang': 'Add a lang attribute to the <html> element, for example <html lang="en">.',
+  'iss-a11y-link-name': 'Give each link visible text, an aria-label, or alt text on its image.',
+  'iss-a11y-button-name': 'Add visible text or an aria-label to each button.',
+  'iss-a11y-label': 'Associate a <label for="..."> with each field, or add an aria-label when a visible label is not possible.',
+  'iss-a11y-duplicate-id': 'Make every id attribute unique on the page.',
+  'iss-a11y-empty-heading': 'Remove empty headings or add meaningful text to them.',
+  'iss-a11y-frame-title': 'Add a title attribute to each iframe describing its content.',
+  'iss-a11y-viewport': 'Remove user-scalable=no and any maximum-scale below 2 from the viewport meta tag.',
+  'iss-a11y-tabindex': 'Use tabindex="0" or -1 instead of positive values, and fix the focus order in the HTML source.',
+};
+
+for (const iss of ISSUES) iss.howToFix = HOW_TO_FIX[iss.id] || '';
+
+/* % of Total uses the issue's section "All" count as the base (SF model:
+ * e.g. Page Titles: Multiple = 7 of 11 HTML pages = 63.64%). */
+const SECTION_ALL = new Map();
+for (const f of FILTERS) if (!SECTION_ALL.has(f.section)) SECTION_ALL.set(f.section, f.id);
 function summariseIssues(pages) {
-  const total = pages.length || 1;
   const out = [];
   for (const iss of ISSUES) {
-    let count;
-    if (iss.id === 'iss-orphan') count = pages.filter((p) => p.isOrphan).length;
-    else count = pages.filter((p) => (p.filters || []).includes(iss.filterId)).length;
-    if (count > 0) out.push({ id: iss.id, name: iss.name, type: iss.type, priority: iss.priority, filterId: iss.filterId, description: iss.description, count, pct: Math.round((count / total) * 1000) / 10 });
+    let count; let base;
+    if (iss.id === 'iss-orphan') { count = pages.filter((p) => p.isOrphan).length; base = pages.filter((p) => !p.external && HTML(p)).length; }
+    else {
+      count = pages.filter((p) => (p.filters || []).includes(iss.filterId)).length;
+      const f = FILTERS.find((x) => x.id === iss.filterId);
+      const allId = f ? SECTION_ALL.get(f.section) : null;
+      base = allId ? pages.filter((p) => (p.filters || []).includes(allId)).length : pages.length;
+    }
+    const total = Math.max(base, count, 1);
+    if (count > 0) out.push({ id: iss.id, name: iss.name, type: iss.type, priority: iss.priority, filterId: iss.filterId, description: iss.description, howToFix: HOW_TO_FIX[iss.id] || '', count, pct: Math.round((count / total) * 10000) / 100 });
   }
   const order = { High: 0, Medium: 1, Low: 2 };
   return out.sort((a, b) => (order[a.priority] - order[b.priority]) || (b.count - a.count));
 }
 
-module.exports = { FILTERS, FILTER_META, SECTIONS, ISSUES, buildFilterContext, applyFilters, summariseIssues, categoryOf, countMap, sdWarningsFor, NONDESCRIPTIVE };
+module.exports = { HOW_TO_FIX, FILTERS, FILTER_META, SECTIONS, ISSUES, buildFilterContext, applyFilters, summariseIssues, categoryOf, countMap, sdWarningsFor, NONDESCRIPTIVE };
