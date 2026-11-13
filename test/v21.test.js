@@ -145,6 +145,6 @@ test('every issue has a description and How To Fix; every tab has an Overview se
     if (i.filterId) assert.ok(FILTERS.some((f) => f.id === i.filterId), i.id + ' filter exists');
   }
   const tabsWithSections = new Set(FILTER_META.map((f) => f.tab));
-  for (const t of SF_TABS) assert.ok(tabsWithSections.has(t.id), `tab ${t.id} has an Overview section`);
+  for (const t of SF_TABS) if (!t.dashboardTab && !t.linkOppsTab) assert.ok(tabsWithSections.has(t.id), `tab ${t.id} has an Overview section`);
   assert.ok(!SF_TABS.some((t) => /keyword/i.test(t.label)) && !FILTER_META.some((f) => /keyword/i.test(f.section + f.name)));
 });

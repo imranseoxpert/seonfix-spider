@@ -1,5 +1,5 @@
 'use strict';
-const { FILTER_META, buildFilterContext, applyFilters, summariseIssues } = require('./filters');
+const { FILTER_META, buildFilterContext, applyFilters, summariseIssues, healthScore } = require('./filters');
 const { normalizeUrl, pixelWidth } = require('./urlutil');
 
 /* SERP mode: no crawling. Each row (URL, Title, Description) is
@@ -34,7 +34,7 @@ function serpAnalyse(text) {
   for (const p of pages) p.filters = ['internal-all', 'internal-html', ...keep(p)];
   const issues = summariseIssues(pages).filter((i) => /^(title|desc)-/.test(i.filterId || ''));
   for (const p of pages) p.issues = issues.filter((i) => (p.filters || []).includes(i.filterId)).map((i) => i.name);
-  return { app: 'Seonfix Spider', version: 2, mode: 'serp', startedAt: new Date().toISOString(), rootUrl: pages[0].address, pages, issues, filterMeta: FILTER_META,
+  return { app: 'Seonfix Spider', version: 2, mode: 'serp', startedAt: new Date().toISOString(), rootUrl: pages[0].address, pages, issues, health: healthScore(issues), filterMeta: FILTER_META,
     stats: { total: pages.length, crawled: 0, internal: pages.length, external: 0, indexable: 0, nonIndexable: 0, errors4xx: 0, errors5xx: 0, redirects: 0, durationMs: 0 },
     analysis: { summary: [{ label: 'Total URLs Encountered', count: pages.length }, { label: 'Total URLs Crawled', count: 0 }], responseTimes: { average: 0, buckets: [], sampled: 0 }, siteStructure: { rows: [], depthChart: [] }, segments: [], spelling: { pagesWithErrors: 0, totalErrors: 0, grammarErrors: 0 } } };
 }

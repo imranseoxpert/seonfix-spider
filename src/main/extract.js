@@ -42,6 +42,7 @@ function linkPosition(path, rules) {
   return 'Content';
 }
 
+function safeDecode(x) { try { return decodeURIComponent(x); } catch (_) { return x; } }
 function md5(text) { return crypto.createHash('md5').update(String(text || '')).digest('hex'); }
 
 function shingles(text, n = 3) {
@@ -146,7 +147,81 @@ function parseDirectives(metaRobots, xRobots) {
   return out;
 }
 
-function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [], searchRules = [], spellCheck = false, grammarCheck = true, contentArea = DEFAULT_CONTENT_AREA, linkPositions = [], storeHtml = false }) {
+/* Simple HTML -> Markdown conversion of the content area (v2.2, for the
+ * View Source "Markdown" view, Bulk Export > All Page Markdown and MCP). */
+function htmlToMarkdown($, root) {
+  const out = [];
+  const inline = (el) => {
+    let t = '';
+    $(el).contents().each((_, n) => {
+      if (n.type === 'text') t += n.data;
+      else if (n.type === 'tag') {
+        const tag = n.name;
+        if (tag === 'br') t += '\n';
+        else if (tag === 'a') { const href = $(n).attr('href') || ''; const txt = inline(n).trim(); t += href && txt ? `[${txt}](${href})` : txt; }
+        else if (tag === 'strong' || tag === 'b') { const x = inline(n).trim(); t += x ? `**${x}**` : ''; }
+        else if (tag === 'em' || tag === 'i') { const x = inline(n).trim(); t += x ? `*${x}*` : ''; }
+        else if (tag === 'code') t += '`' + $(n).text() + '`';
+        else if (tag === 'img') { const alt = $(n).attr('alt') || ''; const src = $(n).attr('src') || ''; if (src) t += `![${alt}](${src})`; }
+        else if (!['script', 'style', 'noscript', 'svg'].includes(tag)) t += inline(n);
+      }
+    });
+    return t.replace(/[ \t]+/g, ' ');
+  };
+  const walk = (el) => {
+    $(el).children().each((_, n) => {
+      const tag = n.name;
+      if (['script', 'style', 'noscript', 'svg', 'template', 'iframe', 'form', 'button'].includes(tag)) return;
+      if (/^h[1-6]$/.test(tag)) { const x = inline(n).trim(); if (x) out.push('#'.repeat(Number(tag[1])) + ' ' + x); }
+      else if (tag === 'p') { const x = inline(n).trim(); if (x) out.push(x); }
+      else if (tag === 'ul' || tag === 'ol') { const items = $(n).children('li').map((i, li) => (tag === 'ol' ? `${i + 1}. ` : '- ') + inline(li).trim()).get().filter((x) => x.length > 2); if (items.length) out.push(items.join('\n')); }
+      else if (tag === 'blockquote') { const x = inline(n).trim(); if (x) out.push('> ' + x); }
+      else if (tag === 'pre') out.push('```\n' + $(n).text().trim() + '\n```');
+      else if (tag === 'table') {
+        const rows = $(n).find('tr').map((_, tr) => '| ' + $(tr).children('th,td').map((__, c) => $(c).text().replace(/\s+/g, ' ').trim()).get().join(' | ') + ' |').get();
+        if (rows.length) { const cols = $(n).find('tr').first().children('th,td').length; rows.splice(1, 0, '|' + ' --- |'.repeat(Math.max(1, cols))); out.push(rows.join('\n')); }
+      }
+      else if (['a', 'span', 'strong', 'em', 'b', 'i', 'img'].includes(tag)) { const x = inline($('<span></span>').append($(n).clone())).trim(); if (x) out.push(x); }
+      else walk(n);
+    });
+  };
+  walk(root);
+  return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/* Open Graph + X (Twitter) Card tags (Social tab, v2.2). */
+function socialTags($) {
+  const meta = (attr, name) => ($(`meta[${attr}="${name}" i]`).attr('content') || '').trim();
+  const both = (name) => meta('name', name) || meta('property', name);
+  return {
+    ogTitle: meta('property', 'og:title'), ogDescription: meta('property', 'og:description'), ogImage: meta('property', 'og:image'),
+    ogUrl: meta('property', 'og:url'), ogType: meta('property', 'og:type'), ogSiteName: meta('property', 'og:site_name'),
+    ogImageWidth: meta('property', 'og:image:width'), ogImageHeight: meta('property', 'og:image:height'), ogImageAlt: meta('property', 'og:image:alt'),
+    twitterCard: both('twitter:card'), twitterTitle: both('twitter:title'), twitterDescription: both('twitter:description'),
+    twitterImage: both('twitter:image'), twitterSite: both('twitter:site'),
+  };
+}
+
+/* Basic HTML validation (Validation tab, v2.2). Works on the raw source,
+ * because HTML parsers silently repair broken documents. */
+function validateHtml(rawHtml) {
+  const src = String(rawHtml || '');
+  const clean = src.replace(/<!--[\s\S]*?-->/g, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+  const count = (re) => (clean.match(re) || []).length;
+  const headMatch = clean.match(/<head[\s>][\s\S]*?(<\/head>|<body[\s>])/i);
+  const headSrc = headMatch ? headMatch[0] : '';
+  const invalidInHead = [...new Set((headSrc.match(/<(img|div|p|span|a|h[1-6]|iframe|ul|ol|li|table|section|article|header|footer|nav|main|form|input|button|br|hr)[\s>/]/gi) || []).map((x) => x.replace(/[<\s>/]/g, '').toLowerCase()))];
+  const bodyIdx = clean.search(/<body[\s>]/i); const headIdx = clean.search(/<head[\s>]/i);
+  return {
+    missingHtml: count(/<html[\s>]/gi) === 0, multipleHtml: count(/<html[\s>]/gi) > 1,
+    missingHead: count(/<head[\s>]/gi) === 0, multipleHead: count(/<head[\s>]/gi) > 1,
+    missingBody: count(/<body[\s>]/gi) === 0, multipleBody: count(/<body[\s>]/gi) > 1,
+    invalidInHead, bodyBeforeHead: bodyIdx >= 0 && headIdx >= 0 && bodyIdx < headIdx,
+    over15mb: src.length > 15 * 1024 * 1024,
+  };
+}
+
+function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [], searchRules = [], spellCheck = false, grammarCheck = true, contentArea = DEFAULT_CONTENT_AREA, linkPositions = [], storeHtml = false, excludeLinkPaths = [], maxLinksPerUrl = 0 }) {
   const $ = cheerio.load(html || '');
   const rawHtml = String(html || '');
   const title = $('title').first().text().trim().replace(/\s+/g, ' ');
@@ -195,7 +270,13 @@ function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [],
     const target = $(el).attr('target') || '';
     const unsafeCrossOrigin = external && /_blank/i.test(target) && !/noopener|noreferrer/i.test(rel);
     const imgAlt = $(el).find('img[alt]').first().attr('alt') || '';
-    links.push({ url: abs, anchor: $(el).text().trim().replace(/\s+/g, ' ').slice(0, 200), alt: imgAlt.trim().slice(0, 200), rel, follow: !/nofollow/i.test(rel), target, external, unsafeCrossOrigin, position: linkPosition(ancestorPath($, el), posRules) });
+    if (maxLinksPerUrl && links.length >= maxLinksPerUrl) return;
+    const path = ancestorPath($, el);
+    const excludedByPath = (excludeLinkPaths || []).some((pat) => { try { return new RegExp(pat, 'i').test(path); } catch (_) { return path.includes(String(pat).toLowerCase()); } });
+    const emptyAnchor = !$(el).text().trim() && !$(el).find('img').length && !($(el).attr('aria-label') || '').trim() && !($(el).attr('title') || '').trim();
+    const fragment = (() => { try { return new URL(href, url).hash.slice(1); } catch (_) { return ''; } })();
+    links.push({ url: abs, anchor: $(el).text().trim().replace(/\s+/g, ' ').slice(0, 200), alt: imgAlt.trim().slice(0, 200), rel, follow: !/nofollow/i.test(rel), target, external, unsafeCrossOrigin, position: linkPosition(path, posRules),
+      ...(emptyAnchor ? { emptyAnchor: true } : {}), ...(excludedByPath ? { excludedByPath: true } : {}), ...(fragment && !fragment.startsWith('!') && !fragment.includes('=') ? { fragment: safeDecode(fragment).slice(0, 120) } : {}) });
   });
   // iframes (followed only when Configuration > Spider > Crawl > Iframes is on)
   const iframes = $('iframe[src]').map((_, el) => normalizeUrl($(el).attr('src') || '', url)).get().filter(Boolean);
@@ -209,7 +290,7 @@ function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [],
   const images = [];
   $('img').each((_, el) => {
     const src = normalizeUrl($(el).attr('src') || '', url);
-    if (src) images.push({ url: src, alt: $(el).attr('alt'), hasAlt: $(el).attr('alt') !== undefined, width: $(el).attr('width') || '', height: $(el).attr('height') || '', hasSizeAttrs: !!($(el).attr('width') && $(el).attr('height')) });
+    if (src) images.push({ url: src, title: $(el).attr('title'), loading: $(el).attr('loading') || '', format: ((src.split(/[?#]/)[0].match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '').toLowerCase(), alt: $(el).attr('alt'), hasAlt: $(el).attr('alt') !== undefined, width: $(el).attr('width') || '', height: $(el).attr('height') || '', hasSizeAttrs: !!($(el).attr('width') && $(el).attr('height')) });
   });
   const backgroundImages = (rawHtml.match(/background(-image)?\s*:[^;}]*url\(/gi) || []).length;
   // resources
@@ -258,6 +339,13 @@ function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [],
   const spell = spellCheck ? countSpellingErrors(text) : { errors: 0, unknown: [] };
   const grammar = grammarCheck ? checkGrammar(text) : { errors: 0, matches: [] };
   const a11y = checkAccessibility($);
+  const social = socialTags($);
+  const validation = validateHtml(rawHtml);
+  const anchorIds = [...new Set($('[id],a[name]').map((_, el) => $(el).attr('id') || $(el).attr('name')).get().filter(Boolean))].slice(0, 3000);
+  const viewport = ($('meta[name="viewport" i]').attr('content') || '').trim();
+  const mobileAlternate = normalizeUrl($('link[rel="alternate" i][media*="max-width" i]').attr('href') || '', url) || '';
+  let markdown = '';
+  if (storeHtml) { try { const md$ = cheerio.load(html || ''); const b = md$('body'); b.find('script,style,noscript,template').remove(); for (const sel of (area.exclude || [])) { try { if (sel) b.find(sel).remove(); } catch (_) {} } markdown = htmlToMarkdown(md$, b).slice(0, 500000); } catch (_) { markdown = ''; } }
   const mixedContent = /^https:/i.test(url) ? [...rawHtml.matchAll(/http:\/\/[^\s"'<>]+/g)].map((m) => m[0]).slice(0, 20) : [];
   const missingSecHeaders = /^https:/i.test(url) ? SECURITY_HEADERS.filter((h) => !headers[h]) : [];
   const soft404 = statusCode === 200 && words.length < 60 && /(\b404\b|not found|page not found|error occurred|does not exist)/i.test(title + ' ' + text.slice(0, 300));
@@ -282,6 +370,8 @@ function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [],
     grammarErrors: grammar.errors, grammarMatches: grammar.matches,
     htmlLang: ($('html').attr('lang') || '').trim(),
     a11yViolations: a11y.violations, a11y: a11y.checks,
+    social, validation, anchorIds, viewport, mobileAlternate,
+    ...(markdown ? { markdown } : {}),
     ...(storeHtml ? { rawHtml: rawHtml.slice(0, 2 * 1024 * 1024) } : {}),
     textRatio: rawHtml ? Math.round((text.length / rawHtml.length) * 1000) / 10 : 0,
     text, textExcerpt: text.slice(0, 3000), hash: md5(text), simhash: simhash(text).toString(),
@@ -292,4 +382,4 @@ function parsePage({ url, html, headers = {}, statusCode = 200, extractors = [],
   };
 }
 
-module.exports = { parsePage, DEFAULT_LINK_POSITIONS, DEFAULT_CONTENT_AREA, ancestorPath, linkPosition, md5, shingles, jaccard, simhash, simhashSimilarity, applyExtractors, applySearch, xpathToCss, syllables, fleschReadingEase, parseDirectives, SECURITY_HEADERS };
+module.exports = { parsePage, htmlToMarkdown, socialTags, validateHtml, DEFAULT_LINK_POSITIONS, DEFAULT_CONTENT_AREA, ancestorPath, linkPosition, md5, shingles, jaccard, simhash, simhashSimilarity, applyExtractors, applySearch, xpathToCss, syllables, fleschReadingEase, parseDirectives, SECURITY_HEADERS };

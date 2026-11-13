@@ -168,6 +168,65 @@ brand green (#00C852) as the accent colour.
   Tree (radial), Directory Tree, Force Directed. **Crawl Analysis >
   Analyse** recomputes Link Score, orphans and near-duplicate groups.
 
+## What's new in v2.2
+
+### MCP server: connect any AI assistant
+Seonfix Spider is an MCP (Model Context Protocol) server, so Claude, Cursor,
+VS Code, Gemini CLI, LM Studio and any other MCP client can use it as a tool.
+Assistants can:
+- crawl websites, or lists of URLs
+- read the overview, issues (with How To Fix), filters, single URLs, inlinks and outlinks
+- read page content as Markdown, text or HTML
+- audit one URL without crawling the whole site
+- check titles and descriptions (SERP mode)
+- compare crawls
+- read AI readiness and internal link suggestions
+- generate reports
+- read and change the crawl configuration
+
+**Two ways to connect** (Configuration > MCP Server shows ready-to-copy settings for each client):
+- **stdio, no server needed:** the AI app starts Seonfix Spider in the background (`Seonfix Spider --mcp`). Use this for Claude Desktop.
+- **Streamable HTTP:** the open app serves `http://127.0.0.1:7811/mcp`. It only listens on this computer and every request must send an access token. Start it from the MCP menu.
+
+**Safety:**
+- Permissions control whether assistants may start crawls, change settings or save files.
+- Credentials and API keys can never be read or changed over MCP.
+- Page content is marked as untrusted third-party data.
+
+There are 25 `spider_*` tools and 4 ready-made prompts: `seo_audit`, `fix_plan`, `page_review` and `compare_changes`.
+
+### From Screaming Frog v25 and the user guide
+- **Dashboard tab:** custom widgets (counters, section charts, top issues, health score, AI readiness, link opportunities). You can keep several dashboards and export one as HTML.
+- **Configurable issues:** right-click any issue to disable it or change its type or priority. Several can be selected at once. Views: Found in Crawl, All Issues, Disabled. A search box was added to both Issues and Overview.
+- **Social tab:** Open Graph and X Card tags, with checks for missing or incomplete tags, og:image not returning 200, og:image too small, and og:url not matching the canonical.
+- **New tabs:** Mobile (viewport and zoom) and Validation (invalid elements in `<head>`, multiple or missing head/body, oversize HTML).
+- **Auto Throttle:** slows down on 429/503 responses and dropped connections, recovers gradually, and pauses if the host stops responding. Adds rate-limit, 5XX and connection-failure retry settings.
+- **Full Spider > Limits:** per crawl depth, folder depth, query strings, per subdomain, by URL path, URL length, links per URL and page size.
+- **Exclude links by link path:** for example nav, mega-menus or faceted filters.
+- **Markdown:** a Markdown view in View Source and Bulk Export > Web > All Page Markdown (needs Store HTML).
+- **N-grams** bottom tab.
+- **Broken Bookmarks:** #fragment links whose target id doesn't exist.
+- **New issues:** Missing Image Title, Hreflang Self Reference Only, Hreflang Mismatch With HTML Lang, Pages With Empty Anchor Tags.
+- **Crawl storage:** finished crawls are saved automatically to File > Crawls, where you can open, compare, rename, lock or delete them. Old crawls are deleted after a retention period.
+- **Export filename patterns:** `{report}`, `{domain}`, `{date}`, `{datetime}`, `{crawl}`.
+- **Scheduling:** enable or disable each schedule, plus a Run Now button. Scheduled crawls also export the audit report.
+- **AI prompts:** OpenAI, Anthropic (Claude, via the official SDK), Google Gemini or local Ollama, run per URL. Results go to the AI tab. Keys are stored encrypted.
+- **Command line:**
+
+      Seonfix Spider --headless --crawl https://example.com --output-folder ./out --export internal,issues,audit,links,markdown,crawl
+
+### Extras Screaming Frog doesn't have
+- **SEO Health Score** (0-100, with a grade) in the Overview, Dashboard, reports and MCP.
+- **AI Readiness tab:**
+  - which AI crawlers robots.txt lets in (GPTBot, OAI-SearchBot, ClaudeBot, Claude-SearchBot, PerplexityBot, Google-Extended and more)
+  - llms.txt and llms-full.txt checks
+  - pages blocked for AI search, and noai/nosnippet directives
+  - thin pages, and indexable pages without schema
+- **Internal link suggestions:** pages with few inlinks, plus pages that mention their key phrase without linking to them, each with a suggested anchor.
+- **Client-ready audit report** in HTML and PDF: health score, prioritised issues with How To Fix and example URLs, AI readiness, link opportunities.
+- **Next-gen image check:** flags JPG, PNG and GIF images (WebP/AVIF are smaller).
+- **Desktop notification** when a crawl finishes in the background.
+
 ## Run locally
 
     npm install
@@ -175,8 +234,8 @@ brand green (#00C852) as the accent colour.
 
 ## Tests
 
-    npm test          # unit + fixture-server integration tests (38 tests)
-    npm run test:app  # Electron GUI smoke test (81 checks; needs a display)
+    npm test          # unit + fixture-server integration tests (46 tests)
+    npm run test:app  # Electron GUI smoke test (93 checks; needs a display)
     npm run live      # live crawl of https://mdimrankhan.com capped at 200 URLs
 
 ## Build installers
@@ -203,8 +262,9 @@ regenerate all sizes (PNG, ICO, ICNS, iconset) with `npm run icons`
 - Google Analytics and Google Search Console data pulls (the tabs and
   config fields exist; pulling data needs Google OAuth, not yet connected).
 - Full AMP validation (only discovery + basic flags).
-- AI provider integrations (OpenAI, Gemini, Anthropic, Ollama) and backlink
-  APIs (Ahrefs / Moz / Majestic) - config fields are stored-only.
+- Backlink APIs (Ahrefs / Moz / Majestic) - config fields are stored-only.
+- Vector embeddings / semantic similarity, custom JavaScript snippets,
+  Lighthouse details, email notifications and proxy settings.
 - Log file analysis mode.
 - A full grammar engine (only the built-in rules above) and colour-contrast
   accessibility checks.

@@ -7,12 +7,12 @@
  * Link Score, image natural-size sniffing, filter-registry finalisation. */
 const { parseRobots, isAllowed } = require('./robots');
 const { parsePage, simhashSimilarity, SECURITY_HEADERS } = require('./extract');
-const { buildFilterContext, applyFilters, summariseIssues, categoryOf } = require('./filters');
+const { buildFilterContext, applyFilters, summariseIssues, categoryOf, healthScore } = require('./filters');
 const { buildAnalysis } = require('./analysis');
 const { normalizeUrl, ensureUrl, classifyInternal, crawlDepthOf, shouldInclude, originOf, registrableDomain } = require('./urlutil');
 
 const UA_PRESETS = {
-  spider: 'SeonfixSpider/2.1 (Seonfix Spider; +https://seonfix.com/spider)',
+  spider: 'SeonfixSpider/2.2 (Seonfix Spider; +https://seonfix.com/spider)',
   chrome: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   googlebot: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
   'googlebot-smartphone': 'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
@@ -40,7 +40,34 @@ const DEFAULT_CONFIG = {
   storeHtml: false, grammarCheck: true,
   contentArea: { include: [], exclude: ['nav', 'footer'] },
   linkPositions: [], formAuth: null,
+  // v2.2 Spider > Limits (null / 0 = no limit)
+  limitUrlsPerDepth: 0, maxFolderDepth: null, maxQueryStrings: null, maxUrlLength: 10000,
+  maxLinksPerUrl: 10000, maxPageSizeKb: 50000, limitPerSubdomain: 0, limitByPath: [],
+  // v2.2 Auto Throttle + retries (Spider > Advanced)
+  autoThrottle: true, rateLimitRetries: 3, retries5xx: 0, connectionRetries: 1, pauseOnHostDown: true,
+  excludeLinkPaths: [], checkAiReadiness: true,
+  // v2.2 app preferences (stored with the configuration)
+  autoSaveCrawls: true, retentionDays: 30, maxSavedCrawls: 200, notifications: true, exportPattern: '{report}',
+  mcpEnabled: false, mcpPort: 7811, mcpAllowCrawl: true, mcpAllowConfig: true, mcpAllowFiles: false, mcpExportDir: '',
+  aiProvider: 'anthropic', aiModel: '', aiPrompts: [], aiMaxUrls: 50, ollamaUrl: 'http://localhost:11434',
 };
+
+/* AI crawlers checked against robots.txt (AI Readiness tab, v2.2). */
+const AI_BOTS = [
+  { bot: 'GPTBot', owner: 'OpenAI', purpose: 'Model training' },
+  { bot: 'OAI-SearchBot', owner: 'OpenAI', purpose: 'ChatGPT search' },
+  { bot: 'ChatGPT-User', owner: 'OpenAI', purpose: 'User-requested fetches' },
+  { bot: 'ClaudeBot', owner: 'Anthropic', purpose: 'Model training' },
+  { bot: 'Claude-SearchBot', owner: 'Anthropic', purpose: 'Claude search' },
+  { bot: 'Claude-User', owner: 'Anthropic', purpose: 'User-requested fetches' },
+  { bot: 'PerplexityBot', owner: 'Perplexity', purpose: 'Perplexity search' },
+  { bot: 'Google-Extended', owner: 'Google', purpose: 'Gemini training / grounding' },
+  { bot: 'Applebot-Extended', owner: 'Apple', purpose: 'Apple Intelligence training' },
+  { bot: 'Meta-ExternalAgent', owner: 'Meta', purpose: 'Model training' },
+  { bot: 'Amazonbot', owner: 'Amazon', purpose: 'Alexa / AI answers' },
+  { bot: 'Bytespider', owner: 'ByteDance', purpose: 'Model training' },
+  { bot: 'CCBot', owner: 'Common Crawl', purpose: 'Open dataset used for training' },
+];
 
 function analyseChain(chain) {
   const seen = new Set(); let loop = false;
@@ -230,7 +257,7 @@ function finalizeCrawl(pages, rootUrl, config = {}) {
   const { issuesForPage } = require('./issues');
   for (const p of pages) p.issues = issuesForPage(p, ctx);
   for (const p of pages) { delete p.text; }
-  const issues = summariseIssues(pages);
+  const issues = summariseIssues(pages, cfg.issueOverrides || {});
   const analysis = buildAnalysis(pages, cfg);
   const stats = {
     total: pages.length, crawled: crawled.length,
@@ -242,7 +269,7 @@ function finalizeCrawl(pages, rootUrl, config = {}) {
     errors5xx: pages.filter((p) => p.statusCode >= 500).length,
     redirects: pages.filter((p) => p.statusCode >= 300 && p.statusCode < 400).length,
   };
-  return { issues, analysis, stats, ctx };
+  return { issues, analysis, stats, ctx, health: healthScore(issues) };
 }
 
 class Crawler {
@@ -306,7 +333,58 @@ class Crawler {
     if (!url || this.queued.has(url)) return;
     if (this.queued.size >= this.config.maxUrls + 5000) return;
     if (!shouldInclude(url, this.config)) return;
+    if (!isStart && kind === 'page' && !this.withinLimits(url, depth)) { this.limited = (this.limited || 0) + 1; return; }
     this.queued.add(url); this.queue.push({ url, depth, kind, isStart });
+  }
+
+  /* Spider > Limits (SF): URLs per crawl depth, folder depth, query strings,
+   * URL length, total per subdomain and per-path caps. */
+  withinLimits(url, depth) {
+    const c = this.config; let u;
+    try { u = new URL(url); } catch (_) { return false; }
+    if (c.maxUrlLength && url.length > c.maxUrlLength) return false;
+    if (typeof c.maxFolderDepth === 'number' && c.maxFolderDepth >= 0) { const dirs = u.pathname.split('/').filter(Boolean).length - (u.pathname.endsWith('/') ? 0 : 1); if (dirs > c.maxFolderDepth) return false; }
+    if (typeof c.maxQueryStrings === 'number' && c.maxQueryStrings >= 0 && [...u.searchParams.keys()].length > c.maxQueryStrings) return false;
+    this.limitCounts = this.limitCounts || { depth: new Map(), host: new Map(), path: new Map() };
+    const L = this.limitCounts;
+    if (c.limitUrlsPerDepth && (L.depth.get(depth) || 0) >= c.limitUrlsPerDepth) return false;
+    if (c.limitPerSubdomain && (L.host.get(u.host) || 0) >= c.limitPerSubdomain) return false;
+    const pathRule = (c.limitByPath || []).find((r) => r && r.pattern && (() => { try { return new RegExp(r.pattern).test(url); } catch (_) { return url.includes(r.pattern); } })());
+    if (pathRule && (L.path.get(pathRule.pattern) || 0) >= Number(pathRule.max || 0)) return false;
+    L.depth.set(depth, (L.depth.get(depth) || 0) + 1);
+    L.host.set(u.host, (L.host.get(u.host) || 0) + 1);
+    if (pathRule) L.path.set(pathRule.pattern, (L.path.get(pathRule.pattern) || 0) + 1);
+    return true;
+  }
+
+  /* Auto Throttle (SF v25): back off when a host answers 429/503 or drops
+   * connections, recover gradually, pause when the host stops responding. */
+  throttleState() { if (!this.throttle) this.throttle = { delayMs: 0, consecutiveFailures: 0, events: 0 }; return this.throttle; }
+  async throttledFetch(url, opts) {
+    const c = this.config; const t = this.throttleState();
+    let attempt = 0; let connTries = 0; let fiveTries = 0;
+    for (;;) {
+      if (c.autoThrottle !== false && t.delayMs) await new Promise((r) => setTimeout(r, t.delayMs));
+      let resp;
+      try { resp = await fetch(url, opts); }
+      catch (err) {
+        t.consecutiveFailures++;
+        if (c.autoThrottle !== false) { t.delayMs = Math.min(10000, Math.max(500, t.delayMs * 2)); t.events++; }
+        if (c.pauseOnHostDown !== false && t.consecutiveFailures >= 10 && !this.paused) { this.paused = true; this.hostDown = true; if (this.hooks.onProgress) this.hooks.onProgress({ crawled: this.pages.size, queued: this.queue.length, discovered: this.queued.size, hostDown: true, throttleMs: t.delayMs }); }
+        if (connTries++ < (c.connectionRetries ?? 1)) continue;
+        throw err;
+      }
+      t.consecutiveFailures = 0;
+      if ((resp.status === 429 || resp.status === 503) && c.autoThrottle !== false && attempt++ < (c.rateLimitRetries ?? 3)) {
+        const ra = Number(resp.headers.get('retry-after'));
+        t.delayMs = Math.min(10000, Math.max(ra > 0 ? ra * 1000 : 0, t.delayMs ? t.delayMs * 2 : 1000)); t.events++;
+        try { await resp.arrayBuffer(); } catch (_) {}
+        continue;
+      }
+      if (resp.status >= 500 && fiveTries++ < (c.retries5xx || 0)) { try { await resp.arrayBuffer(); } catch (_) {} continue; }
+      if (t.delayMs) t.delayMs = t.delayMs < 120 ? 0 : Math.round(t.delayMs * 0.8);
+      return resp;
+    }
   }
 
   async fetchWithRedirects(url) {
@@ -315,7 +393,7 @@ class Crawler {
     const headers = this.reqHeaders();
     for (let hop = 0; hop <= this.config.maxRedirects; hop++) {
       const t0 = Date.now();
-      const resp = await fetch(current, { redirect: 'manual', headers, signal: AbortSignal.timeout(this.config.timeoutMs) });
+      const resp = await this.throttledFetch(current, { redirect: 'manual', headers, signal: AbortSignal.timeout(this.config.timeoutMs) });
       const responseMs = Date.now() - t0;
       if (firstStatus === null) firstStatus = resp.status;
       const loc = resp.headers.get('location');
@@ -330,8 +408,11 @@ class Crawler {
       const hdrs = {}; resp.headers.forEach((v, k) => { hdrs[k.toLowerCase()] = v; });
       let cookies = [];
       try { cookies = typeof resp.headers.getSetCookie === 'function' ? resp.headers.getSetCookie() : (hdrs['set-cookie'] ? [hdrs['set-cookie']] : []); } catch (_) {}
-      const buf = Buffer.from(await resp.arrayBuffer());
-      return { status: resp.status, firstStatus, headers: hdrs, cookies, body: buf, chain, loop, finalUrl: current, responseMs, size: buf.length };
+      let buf = Buffer.from(await resp.arrayBuffer());
+      const maxBytes = (this.config.maxPageSizeKb || 0) * 1024;
+      const tooBig = maxBytes && buf.length > maxBytes;
+      if (tooBig) buf = buf.subarray(0, maxBytes);
+      return { tooBig, status: resp.status, firstStatus, headers: hdrs, cookies, body: buf, chain, loop, finalUrl: current, responseMs, size: buf.length };
     }
     return { status: firstStatus || 0, firstStatus, headers: {}, cookies: [], body: Buffer.alloc(0), chain, loop, finalUrl: current, responseMs: 0, size: 0 };
   }
@@ -368,7 +449,8 @@ class Crawler {
       if (isHtmlType && kind === 'page') {
         const html = r.body.toString('utf8');
         page.htmlLength = html.length;
-        const parsed = parsePage({ url, html, headers: r.headers, statusCode: r.status, extractors: cfg.extractors, searchRules: cfg.searchRules, spellCheck: cfg.spellCheck !== false, grammarCheck: cfg.grammarCheck !== false, contentArea: cfg.contentArea, linkPositions: cfg.linkPositions, storeHtml: !!cfg.storeHtml });
+        const parsed = parsePage({ url, html, headers: r.headers, statusCode: r.status, extractors: cfg.extractors, searchRules: cfg.searchRules, spellCheck: cfg.spellCheck !== false, grammarCheck: cfg.grammarCheck !== false, contentArea: cfg.contentArea, linkPositions: cfg.linkPositions, storeHtml: !!cfg.storeHtml, excludeLinkPaths: cfg.excludeLinkPaths, maxLinksPerUrl: cfg.maxLinksPerUrl });
+        if (r.tooBig) page.truncatedOverMaxSize = true;
         Object.assign(page, parsed);
         page.rawTitle = parsed.title;
         page.contentCategory = 'HTML';
@@ -379,6 +461,7 @@ class Crawler {
           const follow = (u) => { if (this.isInternalUrl(u)) { if (inDepth) this.enqueue(u, depth + 1, 'page'); } else if (cfg.crawlExternal) this.enqueue(u, depth + 1, 'external'); };
           if (page.metaRefresh && page.metaRefresh.url && cfg.followMetaRefresh !== false) follow(page.metaRefresh.url);
           for (const link of parsed.links) {
+            if (link.excludedByPath) continue;
             if (this.isInternalUrl(link.url)) {
               if (!link.follow && !cfg.followInternalNofollow) continue;
               if (inDepth) this.enqueue(link.url, depth + 1, 'page');
@@ -539,7 +622,30 @@ class Crawler {
       tick();
     });
     if (cfg.mode === 'spider' && !this.stopped) { try { await this.discoverSitemaps(); } catch (_) {} }
+    if (cfg.checkAiReadiness !== false && !this.stopped && cfg.mode !== 'serp') { try { await this.checkAiReadiness(); } catch (_) {} }
     return this.finish();
+  }
+
+  /* AI Readiness (v2.2, beyond SF): which AI crawlers robots.txt lets in,
+   * plus llms.txt / llms-full.txt presence. */
+  async checkAiReadiness() {
+    const origin = originOf(this.rootUrl); if (!origin) return;
+    let groups = this.robotsCache.get(origin);
+    if (!groups) { await this.robotsFor(this.rootUrl).catch(() => null); groups = this.robotsCache.get(origin) || this._customGroups || []; }
+    this.aiGroups = groups || [];
+    const bots = AI_BOTS.map((b) => {
+      const explicit = (groups || []).some((g) => g.agents.includes(b.bot.toLowerCase()));
+      return { ...b, allowedRoot: isAllowed(groups || [], b.bot, this.rootUrl), explicitRule: explicit };
+    });
+    const llms = async (path) => {
+      try {
+        const r = await fetch(origin + path, { headers: this.reqHeaders(), signal: AbortSignal.timeout(8000) });
+        const text = r.ok ? await r.text() : '';
+        const looksMd = /^\s*#\s+\S/.test(text) && !/<html/i.test(text);
+        return { url: origin + path, status: r.status, size: text.length, valid: r.ok && looksMd, links: (text.match(/\]\(https?:[^)]+\)/g) || []).length };
+      } catch (e) { return { url: origin + path, status: 0, size: 0, valid: false, error: String(e && e.message || e) }; }
+    };
+    this.aiReadiness = { checkedAt: new Date().toISOString(), robotsFound: !!(this.robotsTextCache.get(origin) || this.config.customRobotsText), bots, llmsTxt: await llms('/llms.txt'), llmsFullTxt: await llms('/llms-full.txt') };
   }
 
   finish() {
@@ -553,11 +659,19 @@ class Crawler {
         pages.push(orphan);
       }
     }
-    const { issues, analysis, stats } = finalizeCrawl(pages, this.rootUrl, this.config);
+    // per-page AI crawler blocking (internal HTML only)
+    if (this.aiReadiness) {
+      for (const p of pages) {
+        if (p.external || p.sitemapOnly || p.contentCategory !== 'HTML') continue;
+        p.aiBlockedBots = AI_BOTS.filter((b) => !isAllowed(this.aiGroups || [], b.bot, p.address)).map((b) => b.bot);
+      }
+    }
+    const { issues, analysis, stats, health } = finalizeCrawl(pages, this.rootUrl, this.config);
     stats.durationMs = Date.now() - this.startedAt;
     const { FILTER_META } = require('./filters');
-    return { app: 'Seonfix Spider', version: 2, startedAt: new Date(this.startedAt).toISOString(), rootUrl: this.rootUrl, mode: this.config.mode, scope: this.config.scope, pages, issues, stats, analysis, sitemaps: this.sitemapList, filterMeta: FILTER_META, login: this.loginResult || null };
+    return { app: 'Seonfix Spider', version: 2, startedAt: new Date(this.startedAt).toISOString(), rootUrl: this.rootUrl, mode: this.config.mode, scope: this.config.scope, pages, issues, health, stats, analysis, sitemaps: this.sitemapList, filterMeta: FILTER_META, login: this.loginResult || null,
+      aiReadiness: this.aiReadiness || null, throttle: this.throttle ? { events: this.throttle.events, finalDelayMs: this.throttle.delayMs } : null, limitedUrls: this.limited || 0 };
   }
 }
 
-module.exports = { Crawler, DEFAULT_CONFIG, UA_PRESETS, analyseChain, parseSitemap, generateSitemap, generateImageSitemap, compareCrawls, computeIndexability, statusText, finalizeCrawl, imageDimensions, isSitemapIndex };
+module.exports = { AI_BOTS, Crawler, DEFAULT_CONFIG, UA_PRESETS, analyseChain, parseSitemap, generateSitemap, generateImageSitemap, compareCrawls, computeIndexability, statusText, finalizeCrawl, imageDimensions, isSitemapIndex };

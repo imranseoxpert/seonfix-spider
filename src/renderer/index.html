@@ -50,6 +50,7 @@
     </div>
     <div id="counts-line"><span id="selected-cells">Selected Cells: 0</span><span id="filter-total">Filter Total: 0</span></div>
     <div id="compare-panel" class="panel-view"></div>
+    <div id="dashboard-panel" class="panel-view"></div>
     <div id="bottom-pane">
       <nav id="bottom-tabs">
         <button data-btab="details" class="active">URL Details</button>
@@ -67,6 +68,7 @@
         <button data-btab="structured">Structured Data Details</button>
         <button data-btab="spelling">Spelling &amp; Grammar</button>
         <button data-btab="a11y">Accessibility</button>
+        <button data-btab="ngrams">N-grams</button>
       </nav>
       <div id="bottom-body">No URL selected</div>
     </div>
@@ -118,6 +120,24 @@
   <p class="hint">One URL per line. Used by List and SERP modes (Configuration or the Mode menu sets the mode).</p>
   <textarea id="list-urls" rows="12" spellcheck="false" placeholder="https://example.com/page-1&#10;https://example.com/page-2"></textarea>
   <div class="dialog-actions"><button type="button" id="list-cancel">Cancel</button><button type="button" id="list-go" class="primary">Start</button></div>
+</dialog>
+
+<div id="ctx-menu" class="popup hidden"></div>
+
+<dialog id="crawls-dialog">
+  <h2>Crawls</h2>
+  <p class="hint">Every finished crawl is saved here automatically (Configuration &gt; Notifications, Exports &amp; Retention). Lock a crawl to keep it from being deleted.</p>
+  <div id="crawls-list"></div>
+  <div class="dialog-actions"><button type="button" id="crawls-close" class="primary">Close</button></div>
+</dialog>
+
+<dialog id="widget-dialog">
+  <h2>Add Widget</h2>
+  <label>Widget <select id="widget-type"><option value="counter">Counter (one filter)</option><option value="section">Chart (Overview section)</option><option value="issues">Top Issues table</option><option value="score">SEO Health Score</option><option value="ai">AI Readiness</option><option value="links">Internal Link Opportunities</option></select></label>
+  <label id="widget-filter-wrap">Filter <select id="widget-filter"></select></label>
+  <label id="widget-section-wrap" class="hidden">Section <select id="widget-section"></select></label>
+  <label>Title (optional) <input type="text" id="widget-title"></label>
+  <div class="dialog-actions"><button type="button" id="widget-cancel">Cancel</button><button type="button" id="widget-add" class="primary">Add</button></div>
 </dialog>
 
 <dialog id="serp-dialog">

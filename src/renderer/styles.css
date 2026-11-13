@@ -206,3 +206,32 @@ pre.source { white-space: pre-wrap; word-break: break-all; font: 11px/1.45 ui-mo
 .cmp-list { flex: 1; min-width: 260px; max-height: 60vh; overflow: auto; background: #171d23; border: 1px solid #2b333d; border-radius: 6px; padding: 8px 12px; }
 .cmp-list ul { margin: 0; padding-left: 18px; }
 button.secondary { align-self: center; }
+
+/* v2.2 additions */
+.side-search { margin-bottom: 6px; } .side-search input { width: 100%; }
+.health-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; margin-bottom: 6px; background: #1f262e; border-radius: 5px; }
+.health-row b { font-size: 15px; margin-left: auto; }
+.grade-pill { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; padding: 1px 6px; font-weight: 700; color: #06230f; background: #9aa0a6; }
+.grade-pill.grade-A, .grade-pill.grade-B { background: #00C852; } .grade-pill.grade-C { background: #F5A623; } .grade-pill.grade-D, .grade-pill.grade-F { background: #D64541; color: #fff; }
+.issue-hint { margin: 0 0 5px; }
+.issues-bar select, .issues-bar input { max-width: 130px; }
+tr.disabled-issue td { opacity: .5; }
+#ctx-menu { position: fixed; z-index: 90; display: flex; flex-direction: column; min-width: 190px; padding: 5px; gap: 1px; }
+#ctx-menu button { text-align: left; border: none; background: transparent; padding: 4px 9px; }
+#ctx-menu button:hover { background: #00C852; color: #06230f; }
+.ctx-head { color: #fff; font-weight: 700; padding: 3px 9px 5px; }
+.ctx-sep { color: #8d9cab; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 6px 9px 2px; border-top: 1px solid #39424d; margin-top: 3px; }
+.dash-head { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.widget { background: #1a2027; border: 1px solid #2b333d; border-radius: 8px; padding: 10px 12px; min-height: 120px; overflow: auto; }
+.w-title { display: flex; justify-content: space-between; align-items: center; font-weight: 700; color: #fff; margin-bottom: 8px; }
+.w-x { padding: 0 6px; font-size: 11px; opacity: .6; } .w-x:hover { opacity: 1; }
+.w-counter { font-size: 40px; font-weight: 700; color: #35D273; cursor: pointer; }
+.w-score { display: flex; align-items: baseline; gap: 8px; } .w-score .big { font-size: 46px; font-weight: 700; color: #fff; }
+.w-issue { cursor: pointer; } .w-issue:hover td { background: #1f2a33; }
+.snippet { border: 1px solid #313a44; border-radius: 6px; margin: 6px 0; }
+.snippet-head { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: #232a32; border-radius: 6px 6px 0 0; }
+.snippet pre { margin: 0; padding: 8px; white-space: pre-wrap; word-break: break-all; font: 11px/1.4 ui-monospace, Menlo, monospace; color: #B9EBCB; }
+#mcp-page code { color: #B9EBCB; }
+#crawls-list table { border-collapse: collapse; width: 100%; } #crawls-list td, #crawls-list th { border-bottom: 1px solid #2b333d; padding: 4px 6px; text-align: left; }
+#crawls-list td button { padding: 2px 7px; margin-left: 3px; }

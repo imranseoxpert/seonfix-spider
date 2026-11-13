@@ -160,7 +160,7 @@ test('content metrics from extraction: soft 404, lorem, spelling', () => {
 
 test('Meta Keywords tab and filters are removed (user request)', () => {
   assert.ok(!SF_TABS.some((t) => /meta keywords/i.test(t.label)), 'no Meta Keywords tab');
-  assert.equal(SF_TABS.length, 27, 'tab bar has 27 tabs');
+  assert.equal(SF_TABS.length, 34, 'tab bar has 34 tabs (v2.2: Dashboard, Social, Mobile, Validation, AI Readiness, AI, Link Opportunities)');
   assert.ok(!FILTER_META.some((f) => /meta keywords/i.test(f.section)), 'no Meta Keywords sidebar section');
   assert.ok(!FILTERS.some((f) => /meta keywords/i.test(f.section)), 'no meta keyword filters');
 });

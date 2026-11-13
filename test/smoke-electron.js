@@ -60,9 +60,9 @@ exports.run = async function run(win) {
   check('progress bar present', await js('!!document.querySelector("#progress-fill") && !!document.querySelector("#progress-label")'));
   check('footer mode label present', await js('/Spider Mode:/.test(document.querySelector("#mode-status").textContent)'));
   // exact default tab order
-  const EXPECTED_TABS = ['Internal', 'External', 'Security', 'Response Codes', 'URL', 'Page Titles', 'Meta Description', 'H1', 'H2', 'Content', 'Images', 'Canonicals', 'Pagination', 'Directives', 'Hreflang', 'JavaScript', 'Links', 'AMP', 'Structured Data', 'Sitemaps', 'PageSpeed', 'Custom Search', 'Custom Extraction', 'Analytics', 'Search Console', 'Accessibility', 'Spelling'];
+  const EXPECTED_TABS = ['Dashboard', 'Internal', 'External', 'Security', 'Response Codes', 'URL', 'Page Titles', 'Meta Description', 'H1', 'H2', 'Content', 'Images', 'Canonicals', 'Pagination', 'Directives', 'Hreflang', 'JavaScript', 'Links', 'AMP', 'Structured Data', 'Sitemaps', 'PageSpeed', 'Custom Search', 'Custom Extraction', 'Analytics', 'Search Console', 'Accessibility', 'Social', 'Mobile', 'Validation', 'AI Readiness', 'AI', 'Link Opportunities', 'Spelling'];
   const tabLabels = await js('[...document.querySelectorAll("#tabs button[data-tab]")].map(b=>b.textContent.trim())');
-  check('main tab order exact (27 tabs, no Meta Keywords)', JSON.stringify(tabLabels) === JSON.stringify(EXPECTED_TABS), tabLabels.join(','));
+  check('main tab order exact (34 tabs, no Meta Keywords)', JSON.stringify(tabLabels) === JSON.stringify(EXPECTED_TABS), tabLabels.join(','));
   const sideTabs = await js('[...document.querySelectorAll("#side-tabs button")].map(b=>b.textContent.trim()).join("|")');
   check('sidebar tabs present', sideTabs === 'Overview|Issues|Site Structure|Segments|Response Times|API|Spelling', sideTabs);
   check('no emoji in UI text', await js('!/[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}]/u.test(document.body.innerText)'));
@@ -71,7 +71,7 @@ exports.run = async function run(win) {
   // Configure Tabs popup
   await js('document.querySelector("#tabs-overflow").click(); true');
   await sleep(150);
-  check('Configure Tabs popup opens with 27 checkboxes', await js('!document.querySelector("#tabs-popup").classList.contains("hidden") && document.querySelectorAll("#tabs-list input[type=checkbox]").length === 27'),
+  check('Configure Tabs popup opens with 34 checkboxes', await js('!document.querySelector("#tabs-popup").classList.contains("hidden") && document.querySelectorAll("#tabs-list input[type=checkbox]").length === 34'),
     await js('document.querySelectorAll("#tabs-list input[type=checkbox]").length'));
   await js('document.querySelector("#tabs-overflow").click(); true');
 
@@ -150,7 +150,7 @@ exports.run = async function run(win) {
   check('Inlinks bottom pane renders', await js('document.querySelectorAll("#bottom-body table").length >= 0 && /Inlinks|From/.test(document.querySelector("#bottom-body").innerText)'));
 
   // v2.1: every main tab opens its own section in the Overview (SF behaviour)
-  const unmapped = await js('window.SF_TABS.map(t => t.id).filter(id => !sectionForTab(id))');
+  const unmapped = await js('window.SF_TABS.filter(t => !t.dashboardTab && !t.linkOppsTab).map(t => t.id).filter(id => !sectionForTab(id))');
   check('every main tab maps to an Overview section', unmapped.length === 0, unmapped.join(','));
   await js('document.querySelector(\'#tabs button[data-tab="canonicals"]\').click(); true');
   await sleep(250);
@@ -184,7 +184,7 @@ exports.run = async function run(win) {
   check('status bar shows Average/Current URL/s', await js('/Average: [\\d.]+ URL\\/s\\. Current: [\\d.]+ URL\\/s\\./.test(document.querySelector("#crawl-rate").textContent)'), await js('document.querySelector("#crawl-rate").textContent'));
   check('status bar shows Completed N of N', await js('/Completed \\d+ of \\d+ \\(100%\\) 0 Remaining/.test(document.querySelector("#crawl-counts").textContent)'));
   const btabs = await js('[...document.querySelectorAll("#bottom-tabs button")].map(b => b.dataset.btab)');
-  check('15 bottom-pane tabs', btabs.length === 15, btabs.join(','));
+  check('16 bottom-pane tabs', btabs.length === 16, btabs.join(','));
   await js('document.querySelector(\'#tabs button[data-tab="internal"]\').click(); true');
   await sleep(150);
   await js('document.querySelector("#grid tbody tr").click(); true');
@@ -200,6 +200,54 @@ exports.run = async function run(win) {
   await sleep(150);
   check('Accessibility tab lists HTML pages', await js('document.querySelectorAll("#grid tbody tr").length >= 1'));
   check('Accessibility section in Overview', await js('!!document.querySelector(\'tr.section-row[data-section="Accessibility"]\')'));
+  // v2.2: Dashboard, health score, configurable issues, MCP page, Crawls dialog, N-grams
+  await js('document.querySelector(\'#tabs button[data-tab="dashboard"]\').click(); true');
+  await sleep(250);
+  check('Dashboard renders default widgets', await js('document.querySelectorAll("#dashboard-panel .widget").length >= 8'), await js('document.querySelectorAll("#dashboard-panel .widget").length'));
+  check('Dashboard shows the health score', await js('/\\d+/.test((document.querySelector(".w-score .big") || {}).textContent || "")'));
+  await shot('dashboard');
+  await js('document.querySelector(\'#side-tabs button[data-stab="overview"]\').click(); true');
+  await sleep(150);
+  check('Overview shows SEO Health Score', await js('/SEO Health Score/.test(document.querySelector("#side-body").innerText)'));
+  await js('const os = document.querySelector("#overview-search"); os.value = "canonical"; os.dispatchEvent(new Event("input")); true');
+  await sleep(150);
+  check('Overview search narrows filters', await js('(() => { const rows = [...document.querySelectorAll("#side-body tr.filter-row")]; return rows.length > 0 && rows.length < 40 && rows.every(r => /canonical/i.test(r.innerText + " " + r.dataset.section)); })()'), await js('document.querySelectorAll("#side-body tr.filter-row").length'));
+  await js('const os2 = document.querySelector("#overview-search"); os2.value = ""; os2.dispatchEvent(new Event("input")); true');
+  await js('document.querySelector(\'#side-tabs button[data-stab="issues"]\').click(); true');
+  await sleep(150);
+  const firstIssue = await js('document.querySelector("tr.issue-trow").dataset.issueid');
+  const beforeCount = await js('window.__spiderState.crawl.issues.length');
+  await js('const tr = document.querySelector("tr.issue-trow"); tr.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 300, clientY: 200 })); true');
+  await sleep(150);
+  check('right-click opens the issue menu', await js('!document.querySelector("#ctx-menu").classList.contains("hidden")'));
+  await js('document.querySelector(\'#ctx-menu [data-ov="disable"]\').click(); true');
+  await sleep(300);
+  check('disabling an issue removes it from the crawl issues', await js(`!window.__spiderState.crawl.issues.some(i => i.id === ${JSON.stringify(firstIssue)}) && window.__spiderState.crawl.issues.length === ${beforeCount} - 1`));
+  await js('document.querySelector("#issue-view").value = "disabled"; document.querySelector("#issue-view").dispatchEvent(new Event("change")); true');
+  await sleep(150);
+  check('Disabled view lists the disabled issue', await js(`!!document.querySelector('tr.issue-trow[data-issueid=${JSON.stringify(firstIssue)}]')`));
+  await js(`const t2 = document.querySelector('tr.issue-trow[data-issueid=${JSON.stringify(firstIssue)}]'); t2.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 300, clientY: 200 })); true`);
+  await sleep(100);
+  await js('document.querySelector(\'#ctx-menu [data-ov="reset"]\').click(); true');
+  await sleep(300);
+  check('reset restores the issue', await js(`window.__spiderState.crawl.issues.some(i => i.id === ${JSON.stringify(firstIssue)})`));
+  await js('document.querySelector("#issue-view").value = "found"; document.querySelector("#issue-view").dispatchEvent(new Event("change")); true');
+  wc.send('menu:action', 'config', 'mcp');
+  await sleep(600);
+  check('MCP config page shows connection snippets', await js('/Claude Desktop/.test(document.querySelector("#mcp-page").innerText) && document.querySelectorAll("#mcp-page .snippet").length >= 5'));
+  check('MCP token shown', await js('(document.querySelector("#mcp-token") || {}).value.length >= 20'));
+  await shot('mcp');
+  await js('document.querySelector("#cfg-cancel").click(); true');
+  wc.send('menu:action', 'crawls');
+  await sleep(500);
+  check('Crawls dialog lists the auto-saved crawl', await js('document.querySelector("#crawls-dialog").open && document.querySelectorAll("#crawls-list [data-cact=open]").length >= 1'));
+  await js('document.querySelector("#crawls-close").click(); true');
+  await js('document.querySelector(\'#tabs button[data-tab="internal"]\').click(); true');
+  await sleep(150);
+  await js('document.querySelector("#grid tbody tr").click(); document.querySelector(\'#bottom-tabs button[data-btab="ngrams"]\').click(); true');
+  await sleep(150);
+  check('N-grams tab lists phrases', await js('/N-gram/.test(document.querySelector("#bottom-body").innerText)'));
+
   // SERP mode (no crawling)
   const keepCrawl = await js('JSON.stringify(window.__spiderState.crawl.pages.length)');
   wc.send('menu:action', 'mode', 'serp');
@@ -214,11 +262,11 @@ exports.run = async function run(win) {
   await sleep(100);
 
   // Config window via menu action: all sections present
-  wc.send('menu:action', 'config');
+  wc.send('menu:action', 'config', 'crawl');
   await sleep(300);
   check('config dialog opens', await js('document.querySelector("#config-dialog").open'));
   const cfgSections = await js('document.querySelectorAll("#cfg-sections button").length');
-  check('config window has all 30 sections', cfgSections === 30, cfgSections);
+  check('config window has all 32 sections', cfgSections === 32, cfgSections);
   check('config Spider > Crawl fields present', await js('!!document.querySelector("#cfg-concurrency") && !!document.querySelector("#cfg-maxurls")'));
   await js('document.querySelector("#cfg-cancel").click(); true');
 

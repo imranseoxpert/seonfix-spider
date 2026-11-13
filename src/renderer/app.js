@@ -20,6 +20,8 @@ let state = {
   mode: 'spider', psi: [], schedules: [], hasPsiKey: false, recentUrls: [],
   bottomSearch: '', focusMode: false, scopeFilter: 'all', collapsed: new Set(lsGet('collapsedSections', [])),
   linkTypeFilter: 'all', linkPosFilter: 'all', rate: { started: 0, samples: [] },
+  linkSugg: [], issueView: 'found', issueSearch: '', overviewSearch: '', issueSel: new Set(), catalog: [], overrides: {},
+  dashboards: lsGet('dashboards', null), activeDash: lsGet('activeDash', 'Main'), ngramN: 2, sourceView: 'html',
 };
 window.__spiderState = state;
 
@@ -73,6 +75,8 @@ function tabRows() {
   const t = currentTab();
   let rows;
   if (t.imagesTab) rows = imageRows(cr);
+  else if (t.linkOppsTab) rows = state.crawl ? state.linkSugg : [];
+  else if (t.dashboardTab) rows = [];
   else if (!t.rows) rows = [];
   else rows = t.rows(cr);
   if (state.filterId && state.filterId !== 'all') rows = rows.filter((r) => (r.filters || []).includes(state.filterId));
@@ -128,10 +132,13 @@ function directoryOf(address) {
 function renderGrid() {
   const t = currentTab();
   const isCompare = state.tab === 'compare';
+  const isDash = !!t.dashboardTab;
   $('#compare-panel').classList.toggle('active', !!isCompare);
-  $('#table-wrap').style.display = isCompare ? 'none' : '';
-  $('#toolbar').style.display = isCompare ? 'none' : '';
+  $('#dashboard-panel').classList.toggle('active', isDash);
+  $('#table-wrap').style.display = isCompare || isDash ? 'none' : '';
+  $('#toolbar').style.display = isCompare || isDash ? 'none' : '';
   if (isCompare) { renderCompare(); updateCountsLine(0); return; }
+  if (isDash) { renderDashboard(); updateCountsLine(0); return; }
   const rows = tabRows();
   const columns = visibleColumns();
   const cx = state.crawl ? crawlCtx(state.crawl) : null;
@@ -212,7 +219,7 @@ function renderBottom() {
   const searchBox = `<input type="text" placeholder="Search..." data-bsearch value="${esc(state.bottomSearch)}">`;
   const bt = state.btab;
   if (bt === 'details') {
-    const kv = [['Address', p.address], ['Content Type', p.contentType || p.contentCategory], ['Status Code', p.statusCode], ['Status', p.status], ['Indexability', p.indexability], ['Indexability Status', p.indexabilityReason], ['Title 1', p.title], ['Title 1 Length', p.titleLength], ['Title 1 Pixel Width', p.titlePixelWidth], ['Meta Description 1', p.metaDescription], ['Meta Description 1 Length', p.metaDescriptionLength], ['Meta Description 1 Pixel Width', p.metaDescriptionPixelWidth], ['H1-1', (p.h1s || [])[0] || ''], ['H1-2', (p.h1s || [])[1] || ''], ['H2-1', (p.h2s || [])[0] || ''], ['H2-2', (p.h2s || [])[1] || ''], ['Meta Robots 1', p.metaRobots], ['X-Robots-Tag 1', p.xRobotsTag], ['Canonical Link Element 1', p.canonical], ['rel="next" 1', (p.pagination || {}).next || ''], ['rel="prev" 1', (p.pagination || {}).prev || ''], ['Size (bytes)', p.sizeBytes], ['Word Count', p.wordCount], ['Sentence Count', p.sentenceCount], ['Average Words Per Sentence', p.avgWordsPerSentence], ['Flesch Reading Ease Score', p.flesch], ['Readability', p.readability], ['Text Ratio', p.textRatio], ['Crawl Depth', p.depth], ['Link Score', p.linkScore], ['Inlinks', p.inlinks], ['Unique Inlinks', p.uniqueInlinks], ['Outlinks', p.outlinks], ['Unique Outlinks', p.uniqueOutlinks], ['External Outlinks', p.externalOutlinks], ['Response Time', typeof p.responseTimeMs === 'number' ? Math.round(p.responseTimeMs) / 1000 : ''], ['Redirect URL', p.redirectUrl], ['Redirect Type', p.redirectType], ['In Sitemap', p.inSitemap ? 'Yes' : 'No'], ['Hash', p.hash], ['Near Duplicate Of', p.nearDuplicateOf || ''], ['Spelling Errors', p.spellingErrors ?? 0], ['Grammar Errors', p.grammarErrors ?? 0], ['Accessibility Violations', p.a11yViolations ?? ''], ['Language', p.htmlLang || ''], ['Issues', (p.issues || []).join('; ')]];
+    const kv = [['Address', p.address], ['Content Type', p.contentType || p.contentCategory], ['Status Code', p.statusCode], ['Status', p.status], ['Indexability', p.indexability], ['Indexability Status', p.indexabilityReason], ['Title 1', p.title], ['Title 1 Length', p.titleLength], ['Title 1 Pixel Width', p.titlePixelWidth], ['Meta Description 1', p.metaDescription], ['Meta Description 1 Length', p.metaDescriptionLength], ['Meta Description 1 Pixel Width', p.metaDescriptionPixelWidth], ['H1-1', (p.h1s || [])[0] || ''], ['H1-2', (p.h1s || [])[1] || ''], ['H2-1', (p.h2s || [])[0] || ''], ['H2-2', (p.h2s || [])[1] || ''], ['Meta Robots 1', p.metaRobots], ['X-Robots-Tag 1', p.xRobotsTag], ['Canonical Link Element 1', p.canonical], ['rel="next" 1', (p.pagination || {}).next || ''], ['rel="prev" 1', (p.pagination || {}).prev || ''], ['Size (bytes)', p.sizeBytes], ['Word Count', p.wordCount], ['Sentence Count', p.sentenceCount], ['Average Words Per Sentence', p.avgWordsPerSentence], ['Flesch Reading Ease Score', p.flesch], ['Readability', p.readability], ['Text Ratio', p.textRatio], ['Crawl Depth', p.depth], ['Link Score', p.linkScore], ['Inlinks', p.inlinks], ['Unique Inlinks', p.uniqueInlinks], ['Outlinks', p.outlinks], ['Unique Outlinks', p.uniqueOutlinks], ['External Outlinks', p.externalOutlinks], ['Response Time', typeof p.responseTimeMs === 'number' ? Math.round(p.responseTimeMs) / 1000 : ''], ['Redirect URL', p.redirectUrl], ['Redirect Type', p.redirectType], ['In Sitemap', p.inSitemap ? 'Yes' : 'No'], ['Hash', p.hash], ['Near Duplicate Of', p.nearDuplicateOf || ''], ['Spelling Errors', p.spellingErrors ?? 0], ['Grammar Errors', p.grammarErrors ?? 0], ['Accessibility Violations', p.a11yViolations ?? ''], ['Language', p.htmlLang || ''], ['Viewport', p.viewport || ''], ['og:title', (p.social || {}).ogTitle || ''], ['og:image', (p.social || {}).ogImage || ''], ['twitter:card', (p.social || {}).twitterCard || ''], ['Blocked AI Crawlers', (p.aiBlockedBots || []).join(', ')], ...Object.entries(p.ai || {}).map(([k, v]) => ['AI: ' + k, v]), ['Issues', (p.issues || []).join('; ')]];
     const rows = kv.filter(([k, v]) => !state.bottomSearch || `${k} ${v}`.toLowerCase().includes(state.bottomSearch.toLowerCase()));
     body.innerHTML = `<div class="bt-toolbar"><button data-bexport>Export</button>${searchBox}</div>` + '<table class="kv"><tr><th>Name</th><th>Value</th></tr>' + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v ?? '')}</td></tr>`).join('') + '</table>';
   } else if (bt === 'inlinks' || bt === 'outlinks') {
@@ -247,9 +254,24 @@ function renderBottom() {
     const msgs = [...(p.jsErrors || []).map((m) => ['Error', m]), ...(p.jsWarnings || []).map((m) => ['Warning', m])];
     body.innerHTML = msgs.length ? '<table><tr><th>Level</th><th>Message</th></tr>' + msgs.map(([l, m]) => `<tr><td>${l}</td><td>${esc(m)}</td></tr>`).join('') + '</table>'
       : `<div class="empty-big">${p.renderedTitle !== undefined ? 'No console messages' : 'Turn on JavaScript rendering (Configuration &gt; Spider &gt; Rendering) to capture the Chrome console log'}</div>`;
+  } else if (bt === 'ngrams') {
+    const words = String(p.textExcerpt || '').toLowerCase().replace(/[^a-z0-9\s'-]/g, ' ').split(/\s+/).filter(Boolean);
+    const n = state.ngramN; const m = new Map();
+    for (let i = 0; i + n <= words.length; i++) { const g = words.slice(i, i + n); if (n === 1 && g[0].length < 3) continue; const k = g.join(' '); m.set(k, (m.get(k) || 0) + 1); }
+    const rows = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 80);
+    const total = Math.max(1, words.length - n + 1);
+    body.innerHTML = `<div class="bt-toolbar"><label class="chk">N-gram size <select id="ngram-n">${[1, 2, 3, 4, 5, 6].map((k) => `<option ${k === n ? 'selected' : ''}>${k}</option>`).join('')}</select></label><button data-bexport>Export</button><span class="hint">From the first 3,000 characters of the content area (${words.length} words).</span></div>` +
+      (rows.length ? '<table><tr><th>N-gram</th><th>Count</th><th>Density</th></tr>' + rows.map(([k, c]) => `<tr><td>${esc(k)}</td><td>${c}</td><td>${(c / total * 100).toFixed(2)}%</td></tr>`).join('') + '</table>' : '<div class="empty-big">No text content for this URL</div>');
+    const sel = $('#ngram-n'); if (sel) sel.addEventListener('change', () => { state.ngramN = Number(sel.value); renderBottom(); });
   } else if (bt === 'source') {
-    body.innerHTML = p.rawHtml ? `<div class="bt-toolbar"><button data-bexport>Export</button><span class="hint">${p.rawHtml.length.toLocaleString()} characters</span></div><pre class="source">${esc(p.rawHtml)}</pre>`
-      : '<div class="empty-big">HTML was not stored for this crawl. Turn on Configuration &gt; Spider &gt; Extraction &gt; Store HTML and crawl again.</div>';
+    const views = `<select id="source-view"><option value="html" ${state.sourceView === 'html' ? 'selected' : ''}>HTML</option><option value="markdown" ${state.sourceView === 'markdown' ? 'selected' : ''}>Markdown</option></select>`;
+    if (state.sourceView === 'markdown') {
+      body.innerHTML = p.markdown ? `<div class="bt-toolbar">${views}<button data-bexport>Export</button></div><pre class="source">${esc(p.markdown)}</pre>` : `<div class="bt-toolbar">${views}</div><div class="empty-big">Markdown is created when Configuration &gt; Spider &gt; Extraction &gt; Store HTML is on.</div>`;
+      const sv0 = $('#source-view'); if (sv0) sv0.addEventListener('change', () => { state.sourceView = sv0.value; renderBottom(); });
+    } else body.innerHTML = p.rawHtml ? `<div class="bt-toolbar"><button data-bexport>Export</button><span class="hint">${p.rawHtml.length.toLocaleString()} characters</span></div><pre class="source">${esc(p.rawHtml)}</pre>`
+      : `<div class="bt-toolbar">${views}</div><div class="empty-big">HTML was not stored for this crawl. Turn on Configuration &gt; Spider &gt; Extraction &gt; Store HTML and crawl again.</div>`;
+    const sv = $('#source-view'); if (sv) sv.addEventListener('change', () => { state.sourceView = sv.value; renderBottom(); });
+    if (state.sourceView === 'html' && p.rawHtml) { const tb = body.querySelector('.bt-toolbar'); if (tb && !tb.querySelector('#source-view')) { tb.insertAdjacentHTML('afterbegin', views); const sv2 = $('#source-view'); sv2.addEventListener('change', () => { state.sourceView = sv2.value; renderBottom(); }); } }
   } else if (bt === 'headers') {
     const h = Object.entries(p.headers || {});
     body.innerHTML = h.length ? '<table class="kv"><tr><th>Header Name</th><th>Header Value</th></tr>' + h.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('') + '</table>' + ((p.redirectChain || []).length ? '<h4>Redirect Chain</h4><table><tr><th>From</th><th>To</th><th>Status</th></tr>' + p.redirectChain.map((x) => `<tr><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.status)}</td></tr>`).join('') + '</table>' : '') : '<div class="empty-big">No HTTP headers recorded</div>';
@@ -275,7 +297,7 @@ function renderBottom() {
     body.innerHTML = p.a11y ? (rows.length ? '<table><tr><th>Violation</th><th>WCAG</th><th>Count</th><th>Examples</th></tr>' + rows.map(([id, v]) => { const d = defs.find((x) => x.id === id) || { name: id, wcag: '' }; return `<tr><td>${esc(d.name)}</td><td>${esc(d.wcag)}</td><td>${v.count}</td><td>${(v.samples || []).map((x) => `<code>${esc(x)}</code>`).join('<br>')}</td></tr>`; }).join('') + '</table>' : '<div class="empty-big">No accessibility violations found by the static checks</div>') : '<div class="empty-big">Accessibility checks run on HTML pages only</div>';
   }
   const be = body.querySelector('[data-bexport]');
-  if (be) be.addEventListener('click', () => window.spider.saveText({ defaultPath: `${bt}-${(p.address || 'url').replace(/[^a-z0-9]+/gi, '-').slice(0, 60)}.txt`, content: bt === 'source' ? (p.rawHtml || '') : body.innerText }));
+  if (be) be.addEventListener('click', () => window.spider.saveText({ defaultPath: `${bt}-${(p.address || 'url').replace(/[^a-z0-9]+/gi, '-').slice(0, 60)}.${bt === 'source' && state.sourceView === 'markdown' ? 'md' : 'txt'}`, content: bt === 'source' ? (state.sourceView === 'markdown' ? (p.markdown || '') : (p.rawHtml || '')) : body.innerText }));
   const bs = body.querySelector('[data-bsearch]');
   if (bs) bs.addEventListener('input', () => { state.bottomSearch = bs.value; renderBottom(); const nbs = $('#bottom-body [data-bsearch]'); if (nbs) { nbs.focus(); nbs.setSelectionRange(nbs.value.length, nbs.value.length); } });
   const lt = body.querySelector('[data-ltype]'); if (lt) lt.addEventListener('change', () => { state.linkTypeFilter = lt.value; renderBottom(); });
@@ -368,14 +390,19 @@ function renderOverviewSide(body, cr) {
   if (!cr) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; setChart(null); return; }
   const total = cr.pages.length || 1;
   const pctOf = (n, base) => (base ? Math.round((n / base) * 10000) / 100 : 0);
-  let html = '<table class="side-table overview"><tr><th></th><th class="num">URLs</th><th class="num">% of Total</th></tr>';
-  const sumCollapsed = state.collapsed.has('Summary');
+  const q = state.overviewSearch.toLowerCase();
+  const h = cr.health;
+  let html = `<div class="side-search"><input type="text" id="overview-search" placeholder="Search filters..." value="${esc(state.overviewSearch)}"></div>`;
+  if (h && !q) html += `<div class="health-row" title="Weighted by issue type, priority and how many URLs are affected"><span>SEO Health Score</span><b class="grade-${esc(h.grade)}">${h.score}/100</b><span class="grade-pill grade-${esc(h.grade)}">${esc(h.grade)}</span></div>`;
+  html += '<table class="side-table overview"><tr><th></th><th class="num">URLs</th><th class="num">% of Total</th></tr>';
+  const sumCollapsed = state.collapsed.has('Summary') || !!q;
   html += `<tr class="section-row" data-section="Summary"><td colspan="3"><span class="collapse-arrow">${sumCollapsed ? '&#9654;' : '&#9660;'}</span> Summary</td></tr>`;
   if (!sumCollapsed) for (const row of (cr.analysis ? cr.analysis.summary : [])) html += `<tr><td class="ind1">${esc(row.label)}</td><td class="num">${row.count}</td><td class="num">${pctOf(row.count, total)}%</td></tr>`;
   const sections = [...new Set(state.filterMeta.map((f) => f.section))];
   for (const section of sections) {
-    const filters = sectionFilters(section);
-    const closed = state.collapsed.has(section);
+    const filters = sectionFilters(section).filter((f) => !q || f.name.toLowerCase().includes(q) || section.toLowerCase().includes(q));
+    if (!filters.length) continue;
+    const closed = state.collapsed.has(section) && !q;
     html += `<tr class="section-row" data-section="${esc(section)}"><td colspan="3"><span class="collapse-arrow">${closed ? '&#9654;' : '&#9660;'}</span> ${esc(section)}</td></tr>`;
     if (closed) continue;
     const base = filters.length && filters[0].name === 'All' ? filterCount(filters[0].id) : total;
@@ -385,6 +412,8 @@ function renderOverviewSide(body, cr) {
     }
   }
   body.innerHTML = html + '</table>';
+  const os = $('#overview-search');
+  if (os) os.addEventListener('input', () => { state.overviewSearch = os.value; renderSidebar(); const n = $('#overview-search'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
   body.querySelectorAll('.section-row').forEach((tr) => tr.addEventListener('click', () => {
     const sec = tr.dataset.section;
     if (state.collapsed.has(sec)) state.collapsed.delete(sec); else state.collapsed.add(sec);
@@ -444,23 +473,69 @@ function selectIssue(cr, id) {
   } else { state.tab = 'internal'; state.filterId = 'all'; state.issueName = iss.name; }
   renderAll();
 }
+function catalogRows(cr) {
+  const found = new Map((cr ? cr.issues : []).map((i) => [i.id, i]));
+  const ov = state.overrides || {};
+  return state.catalog.map((c) => { const f = found.get(c.id); const o = ov[c.id] || {}; return { ...c, type: o.type || c.type, priority: o.priority || c.priority, disabled: !!o.disabled, count: f ? f.count : 0, pct: f ? f.pct : 0, filterId: f ? f.filterId : c.filterId, description: f ? f.description : c.description, howToFix: f ? f.howToFix : '' }; });
+}
 function renderIssuesSide(body, cr) {
   if (!cr) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; setChart('', issueDetailsHtml(null)); return; }
   const counts = { Issue: 0, Warning: 0, Opportunity: 0 };
   for (const i of cr.issues) counts[i.type] = (counts[i.type] || 0) + 1;
   const chips = [['Issue', counts.Issue, 'Issues'], ['Warning', counts.Warning, 'Warnings'], ['Opportunity', counts.Opportunity, 'Opportunities'], ['Total', cr.issues.length, 'Total']];
-  let list = cr.issues;
+  let list = state.issueView === 'found' ? cr.issues : catalogRows(cr).filter((i) => (state.issueView === 'disabled' ? i.disabled : true));
   if (state.issueChip !== 'Total') list = list.filter((i) => i.type === state.issueChip);
-  body.innerHTML = `<div class="issues-bar"><button id="issues-export">Export</button><span class="spacer"></span>${chips.map(([key, n, label]) => `<button class="chip ${state.issueChip === key ? 'active' : ''}" data-chip="${key}">${label}: ${n}</button>`).join('')}</div>
+  if (state.issueSearch) { const q = state.issueSearch.toLowerCase(); list = list.filter((i) => i.name.toLowerCase().includes(q)); }
+  body.innerHTML = `<div class="issues-bar"><button id="issues-export">Export</button><select id="issue-view"><option value="found" ${state.issueView === 'found' ? 'selected' : ''}>Found in Crawl</option><option value="all" ${state.issueView === 'all' ? 'selected' : ''}>All Issues</option><option value="disabled" ${state.issueView === 'disabled' ? 'selected' : ''}>Disabled</option></select><input type="text" id="issue-search" placeholder="Search..." value="${esc(state.issueSearch)}"><span class="spacer"></span>${chips.map(([key, n, label]) => `<button class="chip ${state.issueChip === key ? 'active' : ''}" data-chip="${key}">${label}: ${n}</button>`).join('')}</div>
+  <p class="hint issue-hint">Right-click an issue to disable it or change its type or priority. Cmd/Ctrl-click to select several.</p>
   <table class="side-table issues-table"><tr><th>Issue Name</th><th>Issue Type</th><th>Issue Priority</th><th class="num">URLs</th><th class="num">% of Total</th></tr>
-  ${list.map((i) => `<tr class="issue-trow ${state.selectedIssue === i.id ? 'selected' : ''}" data-issueid="${esc(i.id)}"><td>${esc(i.name)}</td><td class="nowrap">${ISSUE_ICONS[i.type] || ''} ${esc(i.type)}</td><td class="nowrap">${PRIORITY_ICONS[i.priority] || ''} ${esc(i.priority)}</td><td class="num">${i.count}</td><td class="num">${i.pct}%</td></tr>`).join('') || '<tr><td colspan="5">No issues</td></tr>'}</table>`;
-  const sel = cr.issues.find((i) => i.id === state.selectedIssue);
+  ${list.map((i) => `<tr class="issue-trow ${state.selectedIssue === i.id || state.issueSel.has(i.id) ? 'selected' : ''} ${i.disabled ? 'disabled-issue' : ''}" data-issueid="${esc(i.id)}"><td>${esc(i.name)}${i.disabled ? ' <span class="hint">(disabled)</span>' : ''}</td><td class="nowrap">${ISSUE_ICONS[i.type] || ''} ${esc(i.type)}</td><td class="nowrap">${PRIORITY_ICONS[i.priority] || ''} ${esc(i.priority)}</td><td class="num">${i.count}</td><td class="num">${i.pct}%</td></tr>`).join('') || '<tr><td colspan="5">No issues</td></tr>'}</table>`;
+  const sel = cr.issues.find((i) => i.id === state.selectedIssue) || catalogRows(cr).find((i) => i.id === state.selectedIssue);
   setChart('', issueDetailsHtml(sel));
   body.querySelectorAll('[data-chip]').forEach((b) => b.addEventListener('click', () => { state.issueChip = b.dataset.chip; renderSidebar(); }));
-  body.querySelectorAll('.issue-trow').forEach((tr) => tr.addEventListener('click', () => selectIssue(cr, tr.dataset.issueid)));
+  $('#issue-view').addEventListener('change', (e) => { state.issueView = e.target.value; renderSidebar(); });
+  const isearch = $('#issue-search');
+  isearch.addEventListener('input', () => { state.issueSearch = isearch.value; renderSidebar(); const n = $('#issue-search'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
+  body.querySelectorAll('.issue-trow').forEach((tr) => {
+    tr.addEventListener('click', (e) => {
+      const id = tr.dataset.issueid;
+      if (e.metaKey || e.ctrlKey || e.shiftKey) { if (state.issueSel.has(id)) state.issueSel.delete(id); else state.issueSel.add(id); renderSidebar(); return; }
+      state.issueSel = new Set();
+      const inCrawl = cr.issues.find((i) => i.id === id);
+      if (inCrawl) selectIssue(cr, id); else { state.selectedIssue = id; renderSidebar(); }
+    });
+    tr.addEventListener('contextmenu', (e) => { e.preventDefault(); const id = tr.dataset.issueid; if (!state.issueSel.has(id)) state.issueSel = new Set([id]); renderSidebar(); showIssueMenu(e.clientX, e.clientY); });
+  });
   const ex = $('#issues-export'); if (ex) ex.addEventListener('click', exportIssues);
   const cp = $('#issue-copy');
   if (cp && sel) cp.addEventListener('click', () => { const text = `${sel.name}\nType: ${sel.type} | Priority: ${sel.priority} | URLs: ${sel.count} (${sel.pct}%)\n\nDescription\n${sel.description}\n\nHow To Fix\n${sel.howToFix || ''}`; if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { cp.textContent = 'Copied'; setTimeout(() => { cp.textContent = 'Copy'; }, 1200); }); });
+}
+/* Configurable issues (SF v25): disable, or change type / priority. */
+function showIssueMenu(x, y) {
+  const m = $('#ctx-menu');
+  const ids = [...state.issueSel];
+  const n = ids.length;
+  m.innerHTML = `<div class="ctx-head">${n} issue${n > 1 ? 's' : ''} selected</div>
+    <button data-ov="disable">Disable</button><button data-ov="enable">Enable</button>
+    <div class="ctx-sep">Type</div><button data-ov="type:Issue">Issue</button><button data-ov="type:Warning">Warning</button><button data-ov="type:Opportunity">Opportunity</button>
+    <div class="ctx-sep">Priority</div><button data-ov="priority:High">High</button><button data-ov="priority:Medium">Medium</button><button data-ov="priority:Low">Low</button>
+    <div class="ctx-sep"></div><button data-ov="reset">Reset to Default</button>`;
+  m.style.left = Math.min(x, window.innerWidth - 200) + 'px'; m.style.top = Math.min(y, window.innerHeight - 330) + 'px';
+  m.classList.remove('hidden');
+  m.querySelectorAll('[data-ov]').forEach((b) => b.addEventListener('click', async () => {
+    const [k, v] = b.dataset.ov.split(':');
+    const ov = { ...(state.overrides || {}) };
+    for (const id of ids) {
+      const cur = { ...(ov[id] || {}) };
+      if (k === 'disable') cur.disabled = true; else if (k === 'enable') delete cur.disabled; else if (k === 'reset') { delete ov[id]; continue; } else cur[k] = v;
+      ov[id] = cur;
+    }
+    m.classList.add('hidden');
+    state.overrides = ov;
+    const r = await window.spider.issuesSetOverrides(ov);
+    if (r && state.crawl) { state.crawl.issues = r.issues; state.crawl.health = r.health; }
+    state.issueSel = new Set(); renderSidebar();
+  }));
 }
 function renderStructureSide(body, cr) {
   if (!cr || !cr.analysis) { body.innerHTML = '<p class="hint">No crawl yet.</p>'; return; }
@@ -513,7 +588,16 @@ function renderResponseTimesSide(body, cr) {
   <div class="rt-chart">${barSvg(rt.buckets.map((b) => ({ label: b.label, value: b.count })))}</div>`;
   setChart('Response Times', '');
 }
+function aiReadinessHtml(cr) {
+  const ai = cr && cr.aiReadiness;
+  if (!ai) return '';
+  return `<h4>AI Readiness</h4><table class="side-table"><tr><th>AI crawler</th><th>Owner</th><th>Homepage</th></tr>${ai.bots.map((b) => `<tr><td title="${esc(b.purpose)}">${esc(b.bot)}</td><td>${esc(b.owner)}</td><td class="${b.allowedRoot ? 'st-ok' : 'st-err'}">${b.allowedRoot ? 'Allowed' : 'Blocked'}${b.explicitRule ? '' : ' *'}</td></tr>`).join('')}</table><p class="hint">* no bot-specific rule; the * group applies.</p><p>llms.txt: <b class="${ai.llmsTxt.valid ? 'st-ok' : 'st-warn'}">${ai.llmsTxt.valid ? 'Present' : ai.llmsTxt.status === 200 ? 'Present, not valid Markdown' : 'Not found'}</b> &middot; llms-full.txt: <b class="${ai.llmsFullTxt.valid ? 'st-ok' : ''}">${ai.llmsFullTxt.valid ? 'Present' : 'Not found'}</b></p>`;
+}
 function renderApiSide(body, cr) {
+  const mcp = state.mcpStatus || {};
+  const extra = `<h4>MCP Server (AI assistants)</h4><p>${mcp.running ? `<span class="st-ok">Running</span> on http://127.0.0.1:${mcp.port}/mcp` : '<span class="hint">Stopped</span>'} <button id="api-mcp-cfg">Connect AI Assistants...</button></p>` + aiReadinessHtml(cr);
+  const done = () => { body.insertAdjacentHTML('beforeend', extra); const b = $('#api-mcp-cfg'); if (b) b.addEventListener('click', () => openConfig('mcp')); };
+  setTimeout(done, 0);
   if (!state.hasPsiKey) {
     body.innerHTML = '<div class="empty-state"><p>PageSpeed Insights is not connected.</p><p class="hint">Add a PageSpeed API key in Configuration &gt; API Access &gt; PageSpeed, then this tab can fetch live scores for crawled URLs. Google Analytics and Search Console connections require OAuth and are not connected.</p></div>';
     return;
@@ -547,6 +631,52 @@ function renderSpellingSide(body, cr) {
   <tr><td>Total Grammar Errors</td><td>${cr.pages.reduce((a, p) => a + (p.grammarErrors || 0), 0)}</td></tr></table>
   <p class="hint">Dictionary spell check plus built-in grammar rules (repeated words, a/an, "could of", sentence case, missing spaces). Select a URL and open the Spelling &amp; Grammar tab in the bottom pane for details.</p>
   ${rows.length ? '<table class="side-table"><tr><th>URL</th><th>Errors</th></tr>' + rows.map((p) => `<tr><td>${esc(p.address)}</td><td>${p.spellingErrors}</td></tr>`).join('') + '</table>' : ''}`;
+}
+
+/* ---------- custom dashboard (SF v25 style) ---------- */
+const DEFAULT_WIDGETS = [
+  { type: 'score', title: 'SEO Health Score' },
+  { type: 'counter', title: 'Internal URLs', filterId: 'internal-all' },
+  { type: 'counter', title: 'Indexable Pages', filterId: '__indexable' },
+  { type: 'counter', title: 'Client Errors (4xx)', filterId: 'rc-4xx' },
+  { type: 'counter', title: 'Redirects (3xx)', filterId: 'rc-3xx' },
+  { type: 'issues', title: 'Top Issues', limit: 8 },
+  { type: 'section', title: 'Page Titles', section: 'Page Titles' },
+  { type: 'section', title: 'Response Codes', section: 'Response Codes' },
+  { type: 'ai', title: 'AI Readiness' },
+  { type: 'links', title: 'Internal Link Opportunities', limit: 6 },
+];
+function dashboards() { if (!state.dashboards) state.dashboards = { Main: DEFAULT_WIDGETS }; if (!state.dashboards[state.activeDash]) state.activeDash = Object.keys(state.dashboards)[0]; return state.dashboards; }
+function saveDash() { lsSet('dashboards', state.dashboards); lsSet('activeDash', state.activeDash); }
+function widgetHtml(w, cr) {
+  const cnt = (id) => (id === '__indexable' ? cr.pages.filter((p) => !p.external && p.indexability === 'Indexable').length : cr.pages.filter((p) => (p.filters || []).includes(id)).length);
+  if (w.type === 'score') { const h = cr.health || { score: 0, grade: '-' }; return `<div class="w-score grade-${esc(h.grade)}"><span class="big">${h.score}</span><span>/100</span><span class="grade-pill grade-${esc(h.grade)}">${esc(h.grade)}</span></div>`; }
+  if (w.type === 'counter') return `<div class="w-counter" data-goto="${esc(w.filterId)}">${cnt(w.filterId)}</div>`;
+  if (w.type === 'issues') return '<table class="side-table">' + cr.issues.slice(0, w.limit || 8).map((i) => `<tr class="w-issue" data-issue="${esc(i.id)}"><td>${ISSUE_ICONS[i.type] || ''} ${esc(i.name)}</td><td class="num">${i.count}</td></tr>`).join('') + '</table>';
+  if (w.type === 'section') { const fs = sectionFilters(w.section).filter((f) => f.name !== 'All'); return barSvg(fs.map((f) => ({ label: f.name, value: cnt(f.id) })), 300); }
+  if (w.type === 'ai') return aiReadinessHtml(cr).replace('<h4>AI Readiness</h4>', '') || '<p class="hint">Not checked for this crawl.</p>';
+  if (w.type === 'links') return state.linkSugg.length ? '<table class="side-table">' + state.linkSugg.slice(0, w.limit || 6).map((x) => `<tr><td>${esc(x.source.replace(/^https?:\/\/[^/]+/, ''))} &rarr; ${esc(x.target.replace(/^https?:\/\/[^/]+/, ''))}</td><td>"${esc(x.anchor)}"</td></tr>`).join('') + '</table>' : '<p class="hint">No opportunities found.</p>';
+  return '';
+}
+function renderDashboard() {
+  const el = $('#dashboard-panel'); const cr = state.crawl;
+  const all = dashboards(); const widgets = all[state.activeDash] || [];
+  const head = `<div class="dash-head"><select id="dash-pick">${Object.keys(all).map((n) => `<option ${n === state.activeDash ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><button id="dash-new">New Dashboard</button><button id="dash-del">Delete</button><button id="dash-reset">Reset Widgets</button><span class="spacer"></span><button id="dash-export">Export HTML</button><button id="dash-add" class="primary" title="Add widget">+ Add Widget</button></div>`;
+  if (!cr) { el.innerHTML = head + '<div class="empty-big">Run or open a crawl to fill the dashboard.</div>'; wireDash(); return; }
+  el.innerHTML = head + `<div class="dash-grid">${widgets.map((w, i) => `<div class="widget wt-${w.type}"><div class="w-title">${esc(w.title || w.type)}<button class="w-x" data-wdel="${i}" title="Remove widget">x</button></div>${widgetHtml(w, cr)}</div>`).join('')}</div>`;
+  wireDash();
+  el.querySelectorAll('[data-wdel]').forEach((b) => b.addEventListener('click', () => { all[state.activeDash].splice(Number(b.dataset.wdel), 1); saveDash(); renderDashboard(); }));
+  el.querySelectorAll('[data-goto]').forEach((d) => d.addEventListener('click', () => { const f = state.filterMeta.find((m) => m.id === d.dataset.goto); if (f) { state.tab = f.tab; state.filterId = f.name === 'All' ? 'all' : f.id; focusSidebarOnTab(f.tab); renderAll(); } }));
+  el.querySelectorAll('.w-issue').forEach((tr) => tr.addEventListener('click', () => { state.stab = 'issues'; selectIssue(cr, tr.dataset.issue); }));
+}
+function wireDash() {
+  const all = dashboards();
+  $('#dash-pick').addEventListener('change', (e) => { state.activeDash = e.target.value; saveDash(); renderDashboard(); });
+  $('#dash-new').addEventListener('click', () => { const name = prompt('Dashboard name', 'Client summary'); if (!name) return; all[name] = []; state.activeDash = name; saveDash(); renderDashboard(); });
+  $('#dash-del').addEventListener('click', () => { if (Object.keys(all).length < 2) { all[state.activeDash] = []; } else delete all[state.activeDash]; saveDash(); renderDashboard(); });
+  $('#dash-reset').addEventListener('click', () => { all[state.activeDash] = JSON.parse(JSON.stringify(DEFAULT_WIDGETS)); saveDash(); renderDashboard(); });
+  $('#dash-add').addEventListener('click', () => $('#widget-dialog').showModal());
+  $('#dash-export').addEventListener('click', () => { const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(state.activeDash)} - Seonfix Spider</title><style>${[...document.styleSheets].map((ss) => { try { return [...ss.cssRules].map((r) => r.cssText).join('\n'); } catch (_) { return ''; } }).join('\n')}</style></head><body style="overflow:auto;padding:16px">${$('#dashboard-panel').innerHTML}</body></html>`; window.spider.saveText({ defaultPath: 'dashboard.html', content: html }); });
 }
 
 /* ---------- compare panel ---------- */
@@ -629,6 +759,49 @@ async function bulkExport(action, arg) {
   if (action === 'bulk-issues') return exportIssues();
 }
 
+/* ---------- MCP connect page ---------- */
+async function renderMcpPage() {
+  const el = $('#mcp-page'); if (!el) return;
+  const info = await window.spider.mcpInfo(); state.mcpStatus = info.status;
+  const c = collectConfigDraft();
+  const chk = (id, label, val) => `<label class="chk"><input type="checkbox" id="${id}" ${val ? 'checked' : ''}> ${label}</label>`;
+  el.innerHTML = `<p>Connect AI assistants (Claude, ChatGPT-style desktop apps, Cursor, VS Code, Gemini CLI, LM Studio and any MCP client) so they can crawl sites, read issues, URLs, links and page content, compare crawls and change crawl settings.</p>
+  <h4>Server</h4><p>Status: ${info.status.running ? `<b class="st-ok">Running</b> at <code>${esc(info.url)}</code>` : `<b>Stopped</b>${info.status.error ? ` <span class="st-err">(${esc(info.status.error)})</span>` : ''}`} <button type="button" id="mcp-toggle">${info.status.running ? 'Stop Server' : 'Start Server'}</button></p>
+  ${chk('cfg-mcp-enabled', 'Start the MCP server automatically when Seonfix Spider opens', !!c.mcpEnabled)}
+  <label>Port <input type="number" id="cfg-mcp-port" value="${esc(c.mcpPort || 7811)}"></label>
+  <label>Access Token <span class="rowflex"><input type="text" id="mcp-token" value="${esc(info.token)}" readonly><button type="button" data-copy="${esc(info.token)}">Copy</button><button type="button" id="mcp-regen">Regenerate</button></span></label>
+  <p class="hint">The HTTP server only listens on this computer (127.0.0.1) and every request must send the token. The stdio option below needs no server or token: the AI app starts Seonfix Spider in the background itself.</p>
+  <h4>What AI assistants may do</h4>${chk('cfg-mcp-crawl', 'Start, pause and stop crawls', c.mcpAllowCrawl !== false)}${chk('cfg-mcp-config', 'Change crawl configuration (never credentials or keys)', c.mcpAllowConfig !== false)}${chk('cfg-mcp-files', 'Save reports to the export folder', !!c.mcpAllowFiles)}
+  <label>Export Folder <input type="text" id="cfg-mcp-dir" value="${esc(c.mcpExportDir || '')}" placeholder="Documents/Seonfix Spider Exports"></label>
+  <h4>Connection Settings</h4>${Object.entries(info.snippets).map(([name, text]) => `<div class="snippet"><div class="snippet-head"><b>${esc(name)}</b><button type="button" data-copy="${esc(text)}">Copy</button></div><pre>${esc(text)}</pre></div>`).join('')}
+  <p class="hint">Claude Desktop: Settings &gt; Developer &gt; Edit Config, paste the block, then fully quit and reopen Claude. Tools are named spider_* (crawl, overview, issues, URL info, links, content, compare, AI readiness, link suggestions, reports, configuration). Page content returned to the AI comes from third-party sites and is marked as untrusted.</p>`;
+  el.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => { navigator.clipboard.writeText(b.dataset.copy).then(() => { const t0 = b.textContent; b.textContent = 'Copied'; setTimeout(() => { b.textContent = t0; }, 1000); }); }));
+  $('#mcp-toggle').addEventListener('click', async () => { readConfigPage(); await window.spider.configSave({ config: configDraft }); state.config = { ...configDraft }; state.mcpStatus = info.status.running ? await window.spider.mcpStop() : await window.spider.mcpStart(); renderMcpPage(); });
+  $('#mcp-regen').addEventListener('click', async () => { await window.spider.mcpRegenToken(); renderMcpPage(); });
+}
+
+/* ---------- File > Crawls ---------- */
+async function openCrawls() {
+  const list = await window.spider.storeList();
+  const el = $('#crawls-list');
+  el.innerHTML = list.length ? `<table><tr><th>Name</th><th>Root URL</th><th>Crawled</th><th class="num">URLs</th><th class="num">Issues</th><th class="num">Health</th><th></th></tr>${list.map((x) => `<tr><td>${esc(x.name || '')}</td><td>${esc(x.rootUrl || '')}</td><td>${esc(new Date(x.startedAt || x.savedAt).toLocaleString())}</td><td class="num">${x.total ?? ''}</td><td class="num">${x.issues ?? ''}</td><td class="num">${x.score ?? ''}</td><td class="nowrap"><button data-cact="open" data-id="${esc(x.id)}">Open</button><button data-cact="compare" data-id="${esc(x.id)}" title="Compare the current crawl with this one">Compare</button><button data-cact="rename" data-id="${esc(x.id)}">Rename</button><button data-cact="lock" data-id="${esc(x.id)}" data-locked="${x.locked ? 1 : 0}">${x.locked ? 'Unlock' : 'Lock'}</button><button data-cact="delete" data-id="${esc(x.id)}">Delete</button></td></tr>`).join('')}</table>` : '<p class="hint">No saved crawls yet. Finished crawls are saved here automatically.</p>';
+  el.querySelectorAll('[data-cact]').forEach((b) => b.addEventListener('click', async () => {
+    const id = b.dataset.id; const act = b.dataset.cact;
+    if (act === 'open') { const data = await window.spider.storeLoad(id); $('#crawls-dialog').close(); loadCrawlIntoUi(data); return; }
+    if (act === 'compare') { try { state.compare = await window.spider.storeCompare(id); state.tab = 'compare'; $('#crawls-dialog').close(); renderAll(); } catch (e) { alert(e.message); } return; }
+    if (act === 'rename') { const n = prompt('Crawl name'); if (n !== null) await window.spider.storeRename(id, n); }
+    if (act === 'lock') await window.spider.storeLock(id, b.dataset.locked !== '1');
+    if (act === 'delete') { if (!confirm('Delete this saved crawl permanently? This cannot be undone.')) return; await window.spider.storeDelete(id); }
+    openCrawls();
+  }));
+  if (!$('#crawls-dialog').open) $('#crawls-dialog').showModal();
+}
+function loadCrawlIntoUi(data) {
+  state.crawl = data; if (data.filterMeta) state.filterMeta = data.filterMeta; state.selected = null; state.livePages = [];
+  setProgress(null, 100); $('#btn-clear').classList.remove('hidden'); refreshLinkSugg(); renderAll();
+}
+async function refreshLinkSugg() { try { state.linkSugg = state.crawl && state.crawl.mode !== 'serp' ? await window.spider.linksSuggest({ limit: 500 }) : []; } catch (_) { state.linkSugg = []; } if (state.tab === 'linkopps' || state.tab === 'dashboard') renderGrid(); }
+
 /* ---------- config dialog ---------- */
 const CFG_SECTIONS = [
   { id: 'crawl', label: 'Spider > Crawl' }, { id: 'extraction-note', label: 'Spider > Extraction' }, { id: 'limits', label: 'Spider > Limits' },
@@ -642,6 +815,7 @@ const CFG_SECTIONS = [
   { id: 'api-backlinks', label: 'API Access > Backlink APIs' }, { id: 'api-ai', label: 'API Access > AI' },
   { id: 'auth-basic', label: 'Authentication > Standards Based' }, { id: 'auth-form', label: 'Authentication > Forms Based' },
   { id: 'segments', label: 'Segments' }, { id: 'analysis', label: 'Crawl Analysis' }, { id: 'profiles', label: 'Profiles' },
+  { id: 'mcp', label: 'MCP Server (AI Assistants)' }, { id: 'exports', label: 'Notifications, Exports & Retention' },
 ];
 let cfgSection = 'crawl';
 function cfgField(id) { return document.getElementById(id); }
@@ -662,9 +836,9 @@ function renderConfigPage() {
       '<h4>Crawl Behaviour</h4><div class="cfg-grid">' + chk('cfg-canonicals', 'Crawl Canonicals', c.crawlCanonicals !== false) + chk('cfg-pagination', 'Crawl Pagination (rel="next" / "prev")', !!c.crawlPagination) + chk('cfg-hreflang', 'Crawl Hreflang', !!c.crawlHreflang) + chk('cfg-amp', 'Crawl AMP', !!c.crawlAmp) + '</div>' +
       '<h4>Limits &amp; Scope</h4>' + n('cfg-concurrency', 'Threads / Concurrency', c.concurrency) + n('cfg-depth', 'Max Crawl Depth (0 = unlimited)', c.maxDepth) + n('cfg-maxurls', 'Max URLs', c.maxUrls) + `<label>Default Scope <select id="cfg-scope"><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option><option value="all-subdomains">All Subdomains</option><option value="exact">Exact URL</option></select></label>`,
     'extraction-note': () => '<h4>HTML</h4>' + chk('cfg-storehtml', 'Store HTML (needed for the View Source tab; makes saved crawls larger)', !!c.storeHtml) + '<p class="hint">Page titles, meta descriptions, headings, directives, links, images, hreflang and structured data are always extracted. Meta Keywords are not collected. Custom extraction rules live under Custom &gt; Custom Extraction.</p>',
-    'limits': () => n('cfg-timeout', 'Request Timeout (ms)', c.timeoutMs) + n('cfg-maxredirects', 'Max Redirects', c.maxRedirects),
+    'limits': () => '<p class="hint">Leave a field empty for no limit.</p><div class="cfg-grid">' + n('cfg-maxurls2', 'Limit Crawl Total', c.maxUrls) + n('cfg-depth2', 'Limit Crawl Depth (0 = none)', c.maxDepth) + n('cfg-perdepth', 'Limit URLs Per Crawl Depth (0 = none)', c.limitUrlsPerDepth) + n('cfg-folderdepth', 'Limit Max Folder Depth', c.maxFolderDepth ?? '') + n('cfg-querystrings', 'Limit Number of Query Strings', c.maxQueryStrings ?? '') + n('cfg-persub', 'Limit Crawl Total Per Subdomain (0 = none)', c.limitPerSubdomain) + n('cfg-maxredirects', 'Max Redirects To Follow', c.maxRedirects) + n('cfg-urllen', 'Max URL Length To Crawl', c.maxUrlLength) + n('cfg-linksper', 'Max Links Per URL To Crawl', c.maxLinksPerUrl) + n('cfg-pagesize', 'Max Page Size (KB) To Crawl', c.maxPageSizeKb) + n('cfg-timeout', 'Response Timeout (ms)', c.timeoutMs) + '</div>' + ta('cfg-limitpath', 'Limit By URL Path (one per line: regex | max URLs)', linesOf((c.limitByPath || []).map((r) => `${r.pattern} | ${r.max}`)), 3),
     'rendering': () => `<label>Rendering <select id="cfg-rendering"><option value="text">Text Only (raw HTML)</option><option value="rendered">JavaScript Rendering (rendered HTML comparison)</option></select></label><p class="hint">Rendered mode loads up to 200 HTML pages in a hidden Chromium window after the crawl and records rendered-vs-raw differences for the JavaScript tab.</p>`,
-    'advanced': () => t('cfg-cookies', 'Cookies Sent With Every Request', c.cookies, 'name=value; name2=value2') + '<p class="hint">Custom request headers are set under HTTP Header.</p>',
+    'advanced': () => '<h4>Auto Throttle &amp; Retries</h4>' + chk('cfg-autothrottle', 'Auto Throttle (slow down on 429 / 503 / dropped connections, recover gradually)', c.autoThrottle !== false) + chk('cfg-pausedown', 'Pause Crawl If The Host Stops Responding', c.pauseOnHostDown !== false) + '<div class="cfg-grid">' + n('cfg-rlretries', 'Rate-Limited (429/503) Retries', c.rateLimitRetries ?? 3) + n('cfg-5xxretries', '5XX Response Retries', c.retries5xx ?? 0) + n('cfg-connretries', 'Connection Failure Retries', c.connectionRetries ?? 1) + '</div><h4>Other</h4>' + chk('cfg-aiready', 'Check AI Readiness (AI crawlers in robots.txt, llms.txt)', c.checkAiReadiness !== false) + t('cfg-cookies', 'Cookies Sent With Every Request', c.cookies, 'name=value; name2=value2') + '<p class="hint">Custom request headers are set under HTTP Header.</p>',
     'preferences': () => chk('cfg-spell', 'Enable basic spell check', c.spellCheck !== false) + '<p class="hint">Preferences are stored with the configuration.</p>',
     'contentarea': () => '<p class="hint">Word count, readability, spelling, grammar and duplicate checks use only the content area. One CSS selector per line (element, .class or #id).</p>' + ta('cfg-ca-include', 'Include Only These Elements (leave empty for the whole body)', linesOf((c.contentArea || {}).include), 3) + ta('cfg-ca-exclude', 'Exclude These Elements', linesOf((c.contentArea || { exclude: ['nav', 'footer'] }).exclude), 4),
     'duplicates': () => `<label>Near-Duplicate Similarity Threshold (0-1) <input type="text" id="cfg-dupthreshold" value="${esc(c.duplicatesThreshold ?? 0.92)}"></label>`,
@@ -673,7 +847,7 @@ function renderConfigPage() {
     'rewriting': () => ta('cfg-rewrites', 'URL Rewrite Rules (one per line: pattern => replacement, regex)', linesOf((c.urlRewrites || []).map((r) => `${r.pattern} => ${r.replacement}`)), 4),
     'cdns': () => ta('cfg-cdns', 'CDN Host Patterns Treated as Internal (one regex per line)', linesOf(c.cdnPatterns), 3),
     'include': () => ta('cfg-include', 'Include Regex (one per line)', linesOf(c.includePatterns), 4),
-    'exclude': () => ta('cfg-exclude', 'Exclude Regex (one per line)', linesOf(c.excludePatterns), 4),
+    'exclude': () => ta('cfg-exclude', 'Exclude URLs Matching Regex (one per line)', linesOf(c.excludePatterns), 4) + ta('cfg-exclude-path', 'Exclude Links By Link Path (one per line, matched against the link\'s ancestor elements, e.g. nav, .mega-menu, #filters, aside.facets)', linesOf(c.excludeLinkPaths), 4) + '<p class="hint">Link-path exclusion stops links found inside those page areas from being crawled, which helps when navigation or faceted filters have no clear URL pattern.</p>',
     'speed': () => n('cfg-delay', 'Crawl Delay Between Requests (ms)', c.delayMs) + n('cfg-concurrency2', 'Threads / Concurrency', c.concurrency),
     'useragent': () => `<label>User-Agent Preset <select id="cfg-uapreset"><option value="spider">Seonfix Spider</option><option value="chrome">Chrome (Desktop)</option><option value="googlebot">Googlebot</option><option value="googlebot-smartphone">Googlebot Smartphone</option><option value="bingbot">Bingbot</option><option value="custom">Custom</option></select></label>` + t('cfg-uacustom', 'Custom User-Agent', c.userAgentPreset ? '' : (c.userAgent || '')),
     'httpheader': () => ta('cfg-headers-x', 'Custom HTTP Request Headers (one per line, Name: Value)', Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'), 6) + '<p class="hint">For example Accept-Language: en-GB. The User-Agent is set on the User-Agent page.</p>',
@@ -684,14 +858,18 @@ function renderConfigPage() {
     'api-gsc': () => t('cfg-gsc-site', 'Search Console Site URL', c.gscSiteUrl || '') + '<p class="hint">Stored with the configuration. Pulling Search Console data requires Google OAuth, which is not yet connected.</p>',
     'api-psi': () => `<label>PageSpeed Insights API Key <input type="password" id="cfg-psi-key" placeholder="${state.hasPsiKey ? 'Saved (enter to replace)' : 'AIza...'}"></label><p class="hint">The key is stored encrypted on this computer and powers the API sidebar tab and the PageSpeed tab.</p>`,
     'api-backlinks': () => t('cfg-ahrefs-key', 'Ahrefs API Key', '') + t('cfg-moz-key', 'Moz API Key', '') + '<p class="hint">Backlink API connections are not yet implemented; keys entered here are not stored or sent anywhere.</p>',
-    'api-ai': () => t('cfg-openai-key', 'OpenAI API Key', '') + '<p class="hint">AI provider connections are not yet implemented; keys entered here are not stored or sent anywhere.</p>',
+    'api-ai': () => { const prov = state.aiProviders || {}; const cur = c.aiProvider || 'anthropic'; return `<label>Provider <select id="cfg-ai-provider">${Object.entries(prov).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label>` + t('cfg-ai-model', 'Model (leave empty for the provider default)', c.aiModel || '', (prov[cur] || {}).defaultModel || '') + (cur === 'anthropic' ? `<p class="hint">Claude models: ${esc(((prov.anthropic || {}).models || []).join(', '))}</p>` : '') + (cur === 'ollama' ? t('cfg-ollama-url', 'Ollama URL', c.ollamaUrl || 'http://localhost:11434') : `<label>${esc((prov[cur] || {}).label || '')} API Key <input type="password" id="cfg-ai-key" placeholder="${(state.aiKeys || {})[cur] ? 'Saved (enter to replace)' : 'Paste your API key'}"></label>`) + n('cfg-ai-max', 'Max URLs Per Run', c.aiMaxUrls ?? 50) + '<p class="hint">One prompt per line: Name | target | prompt. Targets: ' + esc((state.aiTargets || []).join(', ')) + '.</p>' + ta('cfg-ai-prompts', 'AI Prompts', linesOf((c.aiPrompts || []).map((x) => `${x.name} | ${x.target} | ${x.prompt}`)), 5) + '<p class="hint">Example: Search Intent | page text | Classify the search intent of this page as informational, commercial, transactional or navigational and explain in one sentence.<br>Run them from Crawl Analysis &gt; Run AI Prompts; results appear in the AI tab. Keys are stored encrypted on this computer. Each prompt is one API call per URL and is billed by the provider.</p>'; },
     'auth-basic': () => t('cfg-basic-user', 'Basic Auth Username', (c.basicAuth || {}).username || '') + `<label>Basic Auth Password <input type="password" id="cfg-basic-pass" value="${esc((c.basicAuth || {}).password || '')}"></label><p class="hint">Sent as an Authorization: Basic header with every crawl request.</p>`,
     'auth-form': () => t('cfg-form-url', 'Login Page URL', ((c.formAuth || {}).url) || '', 'https://example.com/login') + t('cfg-form-user', 'Username', ((c.formAuth || {}).username) || '') + `<label>Password <input type="password" id="cfg-form-pass" placeholder="${state.hasFormPassword ? 'Saved (enter to replace)' : ''}"></label>` + t('cfg-form-user-field', 'Username Field Name (optional, detected automatically)', ((c.formAuth || {}).userField) || '') + t('cfg-form-pass-field', 'Password Field Name (optional, detected automatically)', ((c.formAuth || {}).passField) || '') + '<p class="hint">Before crawling, Seonfix Spider opens the login page, fills the form that has a password field (keeping hidden fields such as CSRF tokens), submits it and uses the session cookies for the whole crawl. The password is stored encrypted on this computer. Only use this on sites you are allowed to crawl, and exclude logout URLs.</p>' + '',
     'segments': () => '<p class="hint">One per line: Name | URL pattern or regex.</p>' + ta('cfg-segments', 'Segments', linesOf((c.segments || []).map((s) => `${s.name} | ${s.pattern}`)), 5),
     'analysis': () => '<p class="hint">Crawl Analysis &gt; Analyse in the menu recomputes Link Score, orphan pages and near-duplicate groups for the current crawl.</p>' + `<label>Near-Duplicate Similarity Threshold (0-1) <input type="text" id="cfg-dupthreshold2" value="${esc(c.duplicatesThreshold ?? 0.92)}"></label>`,
+    'mcp': () => '<div id="mcp-page"><p class="hint">Loading...</p></div>',
+    'exports': () => '<h4>Notifications</h4>' + chk('cfg-notify', 'Show a desktop notification when a crawl finishes (while the app is in the background)', c.notifications !== false) + '<h4>Export Filenames</h4>' + t('cfg-exportpattern', 'Filename Pattern', c.exportPattern || '{report}', '{domain}_{report}_{date}') + '<p class="hint">Tokens: {report} (required), {domain}, {date}, {datetime}, {crawl}. Applies to all exports, reports and scheduled crawls.</p><h4>Crawl Storage &amp; Retention</h4>' + chk('cfg-autosave', 'Save every finished crawl automatically (File &gt; Crawls)', c.autoSaveCrawls !== false) + '<div class="cfg-grid">' + n('cfg-retention', 'Delete Saved Crawls After (days, 0 = never)', c.retentionDays ?? 30) + n('cfg-maxcrawls', 'Keep At Most (crawls, 0 = no limit)', c.maxSavedCrawls ?? 200) + '</div><p class="hint">Locked crawls are never deleted.</p>',
     'profiles': () => '<p class="hint">Use the Configuration &gt; Profiles menu to load/save profiles, or set the current configuration as the default.</p>',
   };
   el.innerHTML = (pages[cfgSection] || pages.crawl)();
+  if (cfgSection === 'mcp') renderMcpPage();
+  const ap = cfgField('cfg-ai-provider'); if (ap) ap.addEventListener('change', () => { readConfigPage(); configDraft.aiProvider = ap.value; configDraft.aiModel = ''; renderConfigPage(); });
   const scope = cfgField('cfg-scope'); if (scope) scope.value = c.scope || 'subdomain';
   const rend = cfgField('cfg-rendering'); if (rend) rend.value = c.rendering || 'text';
   const ua = cfgField('cfg-uapreset'); if (ua) ua.value = c.userAgentPreset || 'spider';
@@ -708,9 +886,21 @@ function readConfigPage() {
   num('cfg-timeout', 'timeoutMs'); num('cfg-maxredirects', 'maxRedirects'); num('cfg-delay', 'delayMs');
   chkV('cfg-external', 'crawlExternal'); chkV('cfg-resources', 'crawlResources'); chkV('cfg-imagesizes', 'checkImageSizes');
   chkV('cfg-robots', 'respectRobots'); chkV('cfg-spell', 'spellCheck'); chkV('cfg-spell2', 'spellCheck'); chkV('cfg-grammar', 'grammarCheck');
+  chkV('cfg-mcp-enabled', 'mcpEnabled'); chkV('cfg-mcp-crawl', 'mcpAllowCrawl'); chkV('cfg-mcp-config', 'mcpAllowConfig'); chkV('cfg-mcp-files', 'mcpAllowFiles'); txt('cfg-mcp-dir', 'mcpExportDir'); num('cfg-mcp-port', 'mcpPort');
   chkV('cfg-crawlimages', 'crawlImages'); chkV('cfg-crawlcss', 'crawlCss'); chkV('cfg-crawljs', 'crawlJs');
   chkV('cfg-follow-int-nf', 'followInternalNofollow'); chkV('cfg-follow-ext-nf', 'followExternalNofollow'); chkV('cfg-iframes', 'crawlIframes'); chkV('cfg-metarefresh', 'followMetaRefresh');
   chkV('cfg-canonicals', 'crawlCanonicals'); chkV('cfg-pagination', 'crawlPagination'); chkV('cfg-hreflang', 'crawlHreflang'); chkV('cfg-amp', 'crawlAmp'); chkV('cfg-storehtml', 'storeHtml');
+  num('cfg-maxurls2', 'maxUrls'); num('cfg-depth2', 'maxDepth'); num('cfg-perdepth', 'limitUrlsPerDepth'); num('cfg-persub', 'limitPerSubdomain'); num('cfg-urllen', 'maxUrlLength'); num('cfg-linksper', 'maxLinksPerUrl'); num('cfg-pagesize', 'maxPageSizeKb');
+  const optNum = (id, key) => { const e = cfgField(id); if (e) c[key] = e.value === '' ? null : Math.max(0, Number(e.value)); };
+  optNum('cfg-folderdepth', 'maxFolderDepth'); optNum('cfg-querystrings', 'maxQueryStrings');
+  const exNum = (id, key) => { const e = cfgField(id); if (e) c[key] = Math.max(0, Number(e.value) || 0); };
+  exNum('cfg-rlretries', 'rateLimitRetries'); exNum('cfg-5xxretries', 'retries5xx'); exNum('cfg-connretries', 'connectionRetries'); exNum('cfg-retention', 'retentionDays'); exNum('cfg-maxcrawls', 'maxSavedCrawls'); exNum('cfg-ai-max', 'aiMaxUrls');
+  chkV('cfg-autothrottle', 'autoThrottle'); chkV('cfg-pausedown', 'pauseOnHostDown'); chkV('cfg-aiready', 'checkAiReadiness'); chkV('cfg-notify', 'notifications'); chkV('cfg-autosave', 'autoSaveCrawls');
+  txt('cfg-exportpattern', 'exportPattern'); txt('cfg-ai-provider', 'aiProvider'); txt('cfg-ai-model', 'aiModel'); txt('cfg-ollama-url', 'ollamaUrl');
+  const lp = linesV('cfg-limitpath'); if (lp) c.limitByPath = lp.map((l) => { const [pattern, max] = l.split('|').map((x) => x.trim()); return pattern ? { pattern, max: Number(max) || 0 } : null; }).filter(Boolean);
+  const elp = linesV('cfg-exclude-path'); if (elp) c.excludeLinkPaths = elp;
+  const aip = linesV('cfg-ai-prompts'); if (aip) c.aiPrompts = aip.map((l) => { const [name, target, ...rest] = l.split('|').map((x) => x.trim()); return name && rest.length ? { name, target: target || 'page text', prompt: rest.join('|') } : null; }).filter(Boolean);
+  const aik = cfgField('cfg-ai-key'); if (aik && aik.value) state.pendingAiKey = { provider: c.aiProvider || 'anthropic', key: aik.value };
   const cai = linesV('cfg-ca-include'); const cae = linesV('cfg-ca-exclude'); if (cai || cae) c.contentArea = { include: cai || [], exclude: cae || [] };
   const lpos = linesV('cfg-linkpos'); if (lpos) c.linkPositions = lpos.map((l) => { const [name, ...rest] = l.split('|').map((x) => x.trim()); return rest.length ? { name, pattern: rest.join('|') } : null; }).filter(Boolean);
   txt('cfg-scope', 'scope'); txt('cfg-rendering', 'rendering'); txt('cfg-customrobots', 'customRobotsText');
@@ -735,6 +925,7 @@ async function saveConfigFromDialog() {
   const psi = cfgField('cfg-psi-key');
   const payload = { config };
   if (psi && psi.value) payload.apiKeys = { pagespeed: psi.value };
+  if (state.pendingAiKey) { payload.apiKeys = { ...(payload.apiKeys || {}), ['ai-' + state.pendingAiKey.provider]: state.pendingAiKey.key }; state.aiKeys = { ...(state.aiKeys || {}), [state.pendingAiKey.provider]: true }; state.pendingAiKey = null; }
   if (state.pendingFormPassword) { payload.apiKeys = { ...(payload.apiKeys || {}), formPassword: state.pendingFormPassword }; state.hasFormPassword = true; state.pendingFormPassword = null; }
   await window.spider.configSave(payload);
   state.config = config; configDraft = null;
@@ -780,7 +971,7 @@ function setRateLine() {
   const n = state.crawling ? state.livePages.length : (state.crawl ? state.crawl.stats.crawled || state.crawl.stats.total : 0);
   const avg = n / Math.max(0.5, (now - r.started) / 1000);
   const recent = r.samples.filter((t) => t >= now - 5000).length / 5;
-  el.textContent = `Average: ${avg.toFixed(2)} URL/s. Current: ${(state.crawling ? recent : 0).toFixed(2)} URL/s.`;
+  el.textContent = `Average: ${avg.toFixed(2)} URL/s. Current: ${(state.crawling ? recent : 0).toFixed(2)} URL/s.` + (state.crawling && state.throttleMs ? `  Auto Throttle: ${(state.throttleMs / 1000).toFixed(1)}s delay` : '');
 }
 function currentConfig() {
   const c = { ...(state.config || {}), mode: state.mode === 'compare' ? 'spider' : state.mode, scope: $('#scope-select').value };
@@ -804,7 +995,7 @@ async function runCrawl({ url, listText, config }) {
     const crawl = await window.spider.crawlStart({ url, listText, config });
     state.crawl = crawl;
     if (crawl.filterMeta) state.filterMeta = crawl.filterMeta;
-    setProgress(null, 100);
+    setProgress(null, 100); refreshLinkSugg();
     const u = crawl.rootUrl;
     if (u && !state.recentUrls.includes(u)) { state.recentUrls = [u, ...state.recentUrls].slice(0, 12); }
   } catch (e) { setProgress('Crawl failed: ' + e.message); }
@@ -823,7 +1014,9 @@ async function openScheduling() {
 }
 function renderSchedules() {
   const el = $('#schedule-list');
-  el.innerHTML = state.schedules.length ? state.schedules.map((s, i) => `<div class="tree-row"><span>${esc(s.url)} - ${esc(s.time)} (${esc(s.repeat)}) -&gt; ${esc(s.folder)}</span><span>${esc(s.lastRunNote || 'Never run')}</span><button data-delsch="${i}">Delete</button></div>`).join('') : 'No schedules yet.';
+  el.innerHTML = state.schedules.length ? state.schedules.map((s, i) => `<div class="tree-row"><label class="chk"><input type="checkbox" data-ensch="${i}" ${s.enabled !== false ? 'checked' : ''}> Enabled</label><span>${esc(s.url)} - ${esc(s.time)} (${esc(s.repeat)}) -&gt; ${esc(s.folder)}</span><span>${esc(s.lastRunNote || 'Never run')}</span><button data-runsch="${i}">Run Now</button><button data-delsch="${i}">Delete</button></div>`).join('') : 'No schedules yet.';
+  el.querySelectorAll('[data-ensch]').forEach((cb) => cb.addEventListener('change', async () => { state.schedules[Number(cb.dataset.ensch)].enabled = cb.checked; await window.spider.scheduleSave(state.schedules); }));
+  el.querySelectorAll('[data-runsch]').forEach((b) => b.addEventListener('click', async () => { try { await window.spider.scheduleRunNow(state.schedules[Number(b.dataset.runsch)].id); b.textContent = 'Started'; } catch (e) { alert(e.message); } }));
   el.querySelectorAll('[data-delsch]').forEach((b) => b.addEventListener('click', async () => { state.schedules.splice(Number(b.dataset.delsch), 1); await window.spider.scheduleSave(state.schedules); renderSchedules(); }));
 }
 
@@ -834,6 +1027,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   state.config = got.config; state.uaPresets = got.uaPresets || {};
   state.filterMeta = got.filterMeta || [];
   state.hasPsiKey = !!got.hasPagespeedKey; state.hasFormPassword = !!got.hasFormPassword; state.a11yDefs = got.a11yDefs || [];
+  state.aiProviders = got.aiProviders || {}; state.aiTargets = got.aiTargets || []; state.aiKeys = got.aiKeys || {}; state.mcpStatus = got.mcpStatus || {};
+  try { const cat = await window.spider.issuesCatalog(); state.catalog = cat.catalog; state.overrides = cat.overrides || {}; } catch (_) {}
   state.recentUrls = got.recentUrls || [];
   state.schedules = got.schedules || [];
   if (state.config.scope) $('#scope-select').value = state.config.scope;
@@ -932,6 +1127,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#about-close').addEventListener('click', () => $('#about-dialog').close());
 
   window.spider.onProgress((p) => {
+    state.throttleMs = p.throttleMs || 0;
+    if (p.hostDown) { state.paused = true; $('#btn-start').textContent = 'Resume'; setModeStatus(); alert('The site stopped responding, so the crawl was paused. Press Resume to continue.'); }
     state.discovered = p.discovered || state.discovered;
     const total = Math.max(1, p.discovered || 1);
     setProgress(null, state.crawl ? 100 : (p.crawled / total) * 100);
@@ -943,13 +1140,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (state.livePages.length % 3 === 0 || state.livePages.length < 10) { renderGrid(); }
     setCountsLine();
   });
+  window.spider.onCrawlLoaded((c) => { state.crawling = false; $('#btn-start').textContent = 'Start'; setModeStatus(); loadCrawlIntoUi(c); setProgress('Crawl loaded by an AI assistant (MCP): ' + c.rootUrl, 100); });
+  window.spider.onExternalStart((c) => { state.crawling = true; state.livePages = []; state.crawl = null; state.rate = { started: Date.now(), samples: [], ended: 0 }; $('#url-input').value = c.url; $('#btn-start').textContent = 'Pause'; setModeStatus(); setProgress('AI assistant (MCP) started a crawl of ' + c.url, 0); renderAll(); });
+  window.spider.onConfigChanged((c) => { state.config = c; setProgress('Configuration changed by an AI assistant (MCP).'); });
+  window.spider.onMcpStatus((st) => { state.mcpStatus = st; if (state.stab === 'api') renderSidebar(); });
+  window.spider.onAiProgress((p) => setProgress(`AI prompts: ${p.done} of ${p.total} URLs${p.errors ? ` (${p.errors} errors)` : ''}`, (p.done / Math.max(1, p.total)) * 100));
+  document.addEventListener('click', (e) => { if (!e.target.closest('#ctx-menu')) $('#ctx-menu').classList.add('hidden'); });
+  $('#crawls-close').addEventListener('click', () => $('#crawls-dialog').close());
+  $('#widget-type').addEventListener('change', () => { const t0 = $('#widget-type').value; $('#widget-filter-wrap').classList.toggle('hidden', t0 !== 'counter'); $('#widget-section-wrap').classList.toggle('hidden', t0 !== 'section'); });
+  $('#widget-cancel').addEventListener('click', () => $('#widget-dialog').close());
+  $('#widget-add').addEventListener('click', () => { const type = $('#widget-type').value; const w = { type, title: $('#widget-title').value.trim() }; if (type === 'counter') { w.filterId = $('#widget-filter').value; w.title = w.title || (state.filterMeta.find((f) => f.id === w.filterId) || {}).section + ': ' + (state.filterMeta.find((f) => f.id === w.filterId) || {}).name; } if (type === 'section') { w.section = $('#widget-section').value; w.title = w.title || w.section; } if (!w.title) w.title = $('#widget-type').selectedOptions[0].textContent; dashboards()[state.activeDash].push(w); saveDash(); $('#widget-dialog').close(); renderDashboard(); });
+  $('#widget-filter').innerHTML = state.filterMeta.map((f) => `<option value="${esc(f.id)}">${esc(f.section)}: ${esc(f.name)}</option>`).join('');
+  $('#widget-section').innerHTML = [...new Set(state.filterMeta.map((f) => f.section))].map((x) => `<option>${esc(x)}</option>`).join('');
   window.spider.onMenu(async (action, arg) => {
     try {
-      if (action === 'open') { const data = await window.spider.crawlOpen(); if (data) { state.crawl = data; if (data.filterMeta) state.filterMeta = data.filterMeta; state.selected = null; setProgress(null, 100); renderAll(); } }
+      if (action === 'open') { const data = await window.spider.crawlOpen(); if (data) loadCrawlIntoUi(data); }
       else if (action === 'open-path') { const data = await window.spider.crawlOpenPath(arg); if (data) { state.crawl = data; if (data.filterMeta) state.filterMeta = data.filterMeta; state.selected = null; setProgress(null, 100); renderAll(); } }
       else if (action === 'save') { const r = await window.spider.crawlSave(false); if (r && r.saved) setProgress('Crawl saved'); }
       else if (action === 'save-as') { const r = await window.spider.crawlSave(true); if (r && r.saved) setProgress('Crawl saved'); }
       else if (action === 'crawl-url') { $('#url-input').value = arg; startCrawl(arg); }
+      else if (action === 'crawls') openCrawls();
+      else if (action === 'report-pdf') { const r = await window.spider.reportPdf(); if (r && r.saved) setProgress('PDF report saved to ' + r.path); }
+      else if (action === 'link-suggestions') { await refreshLinkSugg(); state.tab = 'linkopps'; if (!state.visibleTabs.includes('linkopps')) state.visibleTabs.push('linkopps'); renderAll(); }
+      else if (action === 'ai-run') { setProgress('Running AI prompts...', 0); const r = await window.spider.aiRun(); for (const p of state.crawl.pages) if (r.ai[p.address]) p.ai = r.ai[p.address]; state.crawl.pages.forEach((p) => { if (p.ai) { p.filters = (p.filters || []).filter((f) => !f.startsWith('aip-')).concat(['aip-all'], Object.values(p.ai).some((v) => String(v || '').trim() && !String(v).startsWith('ERROR:')) ? ['aip-has'] : [], Object.values(p.ai).some((v) => String(v || '').startsWith('ERROR:')) ? ['aip-errors'] : []); } }); setProgress(`AI prompts finished: ${r.done} URLs${r.errors ? `, ${r.errors} errors` : ''}`, 100); state.tab = 'ai'; focusSidebarOnTab('ai'); renderAll(); }
       else if (action === 'scheduling') openScheduling();
       else if (action === 'export') exportCurrentTab();
       else if (action === 'reset-columns') { state.hiddenCols = {}; lsSet('hiddenCols', {}); renderGrid(); }

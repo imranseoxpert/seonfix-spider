@@ -48,6 +48,16 @@ function buildFilterContext(pages, rootUrl, config = {}) {
     ampTargets: new Set(), sitemapUrls: new Set(),
   };
   for (const p of pages) if (p.nearDuplicateOf) ctx.nearDup.add(p.address);
+  // broken bookmarks: links to url#fragment where the target page has no matching id/name
+  ctx.brokenBookmarks = new Map();
+  for (const p of pages) {
+    for (const l of p.links || []) {
+      if (!l.fragment || l.external) continue;
+      const t = ctx.byUrl.get(l.url);
+      if (!t || !Array.isArray(t.anchorIds)) continue;
+      if (!t.anchorIds.includes(l.fragment) && l.fragment !== 'top') { if (!ctx.brokenBookmarks.has(p.address)) ctx.brokenBookmarks.set(p.address, []); ctx.brokenBookmarks.get(p.address).push(l.url + '#' + l.fragment); }
+    }
+  }
   for (const p of pages) if (HTML(p) && p.statusCode === 200 && (p.uniqueInlinks || 0) === 0 && !p.isStartUrl && !p.sitemapOnly) ctx.orphan.add(p.address);
   for (const p of pages) if (p.ampUrl) ctx.ampTargets.add(p.ampUrl);
   for (const p of pages) if (p.inSitemap) ctx.sitemapUrls.add(p.address);
@@ -159,7 +169,7 @@ const FILTERS = [
   F('url-parameters', 'URL', 'Parameters', 'url', (p) => p.address.includes('?')),
   F('url-ga-params', 'URL', 'GA Tracking Parameters', 'url', (p) => /[?&](utm_|gclid|fbclid|mc_eid|_ga)/.test(p.address)),
   F('url-over-115', 'URL', 'Over 115 Characters', 'url', (p) => p.address.length > 115),
-  F('url-broken-bookmarks', 'URL', 'Broken Bookmarks', 'url', (p) => (p.links || []).some((l) => /#/.test(l.rawHref || '')) && false),
+  F('url-broken-bookmarks', 'URL', 'Broken Bookmarks', 'url', (p, ctx) => ctx.brokenBookmarks.has(p.address)),
   F('url-internal-search', 'URL', 'Internal Search', 'url', (p) => /[?&](s|q|query|search|keyword)=/.test(p.address)),
   F('url-hash', 'URL', 'Hash Value', 'url', (p) => (p.hashLinks || 0) > 0),
   F('url-multiple-params', 'URL', 'Multiple Parameters', 'url', (p) => { try { return [...new URL(p.address).searchParams.keys()].length > 1; } catch (_) { return false; } }),
@@ -220,6 +230,8 @@ const FILTERS = [
   F('img-background', 'Images', 'Background Images', 'images', (p) => (p.backgroundImages || 0) > 0),
   F('img-incorrect-size', 'Images', 'Incorrectly Sized Images', 'images', (p) => (p.images || []).some((i) => i.incorrectlySized)),
   F('img-missing-size-attrs', 'Images', 'Missing Size Attributes', 'images', (p) => (p.images || []).some((i) => !i.hasSizeAttrs)),
+  F('img-missing-title', 'Images', 'Missing Image Title', 'images', (p) => (p.images || []).some((i) => i.title === undefined || i.title === null)),
+  F('img-not-nextgen', 'Images', 'Not Next-Gen Format (JPG/PNG/GIF)', 'images', (p) => (p.images || []).some((i) => ['jpg', 'jpeg', 'png', 'gif', 'bmp'].includes(i.format))),
   // ---- Canonicals ----
   F('can-all', 'Canonicals', 'All', 'canonicals', (p) => HTML(p)),
   F('can-contains', 'Canonicals', 'Contains Canonical', 'canonicals', (p) => !!p.canonical),
@@ -277,6 +289,8 @@ const FILTERS = [
   F('hl-not-canonical', 'Hreflang', 'Not Using Canonical', 'hreflang', (p, ctx) => ctx.hl.notCanonical.has(p.address)),
   F('hl-missing-xdefault', 'Hreflang', 'Missing X-Default', 'hreflang', (p, ctx) => ctx.hl.missingXDefault.has(p.address)),
   F('hl-outside-head', 'Hreflang', 'Outside <head>', 'hreflang', (p) => !!p.hreflangOutsideHead),
+  F('hl-self-only', 'Hreflang', 'Self Reference Only', 'hreflang', (p) => (p.hreflang || []).length > 0 && (p.hreflang || []).every((h) => h.url === p.address)),
+  F('hl-lang-mismatch', 'Hreflang', 'Mismatch With HTML Lang Attribute', 'hreflang', (p) => { const self = (p.hreflang || []).find((h) => h.url === p.address && String(h.lang).toLowerCase() !== 'x-default'); return !!self && !!p.htmlLang && String(self.lang).toLowerCase().split('-')[0] !== String(p.htmlLang).toLowerCase().split('-')[0]; }),
   // ---- JavaScript ----
   F('js-all', 'JavaScript', 'All', 'javascript', (p) => HTML(p)),
   F('js-blocked-resources', 'JavaScript', 'Pages with Blocked Resources', 'javascript', (p) => (p.blockedResources || []).length > 0),
@@ -301,6 +315,7 @@ const FILTERS = [
   F('links-no-anchor', 'Links', 'Internal Outlinks With No Anchor Text', 'links', (p) => (p.links || []).some((l) => !l.external && !(l.anchor || '').trim())),
   F('links-nondesc-anchor', 'Links', 'Non-Descriptive Anchor Text in Internal Outlinks', 'links', (p) => (p.links || []).some((l) => !l.external && NONDESCRIPTIVE.has((l.anchor || '').trim().toLowerCase()))),
   F('links-high-external', 'Links', 'Pages With High External Outlinks', 'links', (p) => (p.externalOutlinks || 0) > 50),
+  F('links-empty-anchor', 'Links', 'Pages With Empty Anchor Tags', 'links', (p) => (p.links || []).some((l) => l.emptyAnchor)),
   // ---- AMP ----
   F('amp-all', 'AMP', 'All', 'amp', (p) => !!p.ampUrl || !!p.isAmp),
   F('amp-urls', 'AMP', 'AMP URLs', 'amp', (p) => !!p.isAmp),
@@ -338,6 +353,44 @@ const FILTERS = [
   F('a11y-all', 'Accessibility', 'All', 'accessibility', (p) => HTML(p) && !!p.a11y),
   F('a11y-any', 'Accessibility', 'Pages With Violations', 'accessibility', (p) => (p.a11yViolations || 0) > 0),
   ...A11Y_CHECKS.map((c) => F('a11y-' + c.id, 'Accessibility', c.name, 'accessibility', (p) => ((p.a11y || {})[c.id] || {}).count > 0)),
+  // ---- Social (Open Graph + X Cards) ----
+  F('soc-all', 'Social', 'All', 'social', (p) => HTML(p) && !!p.social),
+  F('soc-og-missing', 'Social', 'Open Graph Tags Missing', 'social', (p) => isHtml200(p) && !!p.social && !p.social.ogTitle && !p.social.ogDescription && !p.social.ogImage),
+  F('soc-og-incomplete', 'Social', 'Open Graph Incomplete (title, description, image or url)', 'social', (p) => !!p.social && !!(p.social.ogTitle || p.social.ogImage || p.social.ogDescription) && !(p.social.ogTitle && p.social.ogDescription && p.social.ogImage && p.social.ogUrl)),
+  F('soc-og-image-missing', 'Social', 'og:image Missing', 'social', (p) => isHtml200(p) && !!p.social && !p.social.ogImage),
+  F('soc-og-image-non200', 'Social', 'og:image Not 200', 'social', (p, ctx) => { const u = (p.social || {}).ogImage; const t = u && ctx.byUrl.get(u); return !!t && !!t.statusCode && t.statusCode !== 200; }),
+  F('soc-og-image-small', 'Social', 'og:image Smaller Than 1200x630', 'social', (p, ctx) => { const so = p.social || {}; const t = so.ogImage && ctx.byUrl.get(so.ogImage); const w = Number(so.ogImageWidth) || (t && t.imageWidth) || 0; const h = Number(so.ogImageHeight) || (t && t.imageHeight) || 0; return !!so.ogImage && w > 0 && h > 0 && (w < 1200 || h < 630); }),
+  F('soc-og-url-mismatch', 'Social', 'og:url Does Not Match Canonical', 'social', (p) => !!(p.social || {}).ogUrl && !!(p.canonical || p.address) && (p.social.ogUrl.replace(/\/$/, '') !== (p.canonical || p.address).replace(/\/$/, ''))),
+  F('soc-tw-missing', 'Social', 'X Card Missing', 'social', (p) => isHtml200(p) && !!p.social && !p.social.twitterCard),
+  F('soc-tw-incomplete', 'Social', 'X Card Incomplete', 'social', (p) => !!(p.social || {}).twitterCard && !((p.social.twitterTitle || p.social.ogTitle) && (p.social.twitterImage || p.social.ogImage))),
+  // ---- Mobile ----
+  F('mob-all', 'Mobile', 'All', 'mobile', (p) => HTML(p) && p.viewport !== undefined),
+  F('mob-viewport-missing', 'Mobile', 'Viewport Not Set', 'mobile', (p) => isHtml200(p) && p.viewport !== undefined && !p.viewport),
+  F('mob-viewport-not-responsive', 'Mobile', 'Viewport Not Device Width', 'mobile', (p) => !!p.viewport && !/width\s*=\s*device-width/i.test(p.viewport)),
+  F('mob-zoom-disabled', 'Mobile', 'Zoom Disabled', 'mobile', (p) => (((p.a11y || {})['meta-viewport']) || {}).count > 0),
+  F('mob-alternate', 'Mobile', 'Has Mobile Alternate', 'mobile', (p) => !!p.mobileAlternate),
+  // ---- Validation ----
+  F('val-all', 'Validation', 'All', 'validation', (p) => HTML(p) && !!p.validation),
+  F('val-invalid-head', 'Validation', 'Invalid HTML Elements In <head>', 'validation', (p) => ((p.validation || {}).invalidInHead || []).length > 0),
+  F('val-missing-head', 'Validation', '<head> Missing', 'validation', (p) => !!(p.validation || {}).missingHead),
+  F('val-multiple-head', 'Validation', 'Multiple <head>', 'validation', (p) => !!(p.validation || {}).multipleHead),
+  F('val-missing-body', 'Validation', '<body> Missing', 'validation', (p) => !!(p.validation || {}).missingBody),
+  F('val-multiple-body', 'Validation', 'Multiple <body>', 'validation', (p) => !!(p.validation || {}).multipleBody),
+  F('val-body-before-head', 'Validation', '<body> Before <head>', 'validation', (p) => !!(p.validation || {}).bodyBeforeHead),
+  F('val-missing-html', 'Validation', '<html> Missing', 'validation', (p) => !!(p.validation || {}).missingHtml),
+  F('val-over-15mb', 'Validation', 'HTML Over 15MB (Google stops reading)', 'validation', (p) => !!(p.validation || {}).over15mb || !!p.truncatedOverMaxSize),
+  // ---- AI Readiness (beyond SF) ----
+  F('ai-all', 'AI Readiness', 'All', 'aireadiness', (p) => HTML(p) && Array.isArray(p.aiBlockedBots)),
+  F('ai-blocked-some', 'AI Readiness', 'Blocked For Some AI Crawlers', 'aireadiness', (p) => (p.aiBlockedBots || []).length > 0),
+  F('ai-blocked-search', 'AI Readiness', 'Blocked For AI Search (OAI-SearchBot / Claude-SearchBot / PerplexityBot)', 'aireadiness', (p) => (p.aiBlockedBots || []).some((b) => ['OAI-SearchBot', 'Claude-SearchBot', 'PerplexityBot'].includes(b))),
+  F('ai-noai', 'AI Readiness', 'noai / noimageai Directive', 'aireadiness', (p) => (p.directives || []).some((d) => d === 'noai' || d === 'noimageai')),
+  F('ai-nosnippet', 'AI Readiness', 'nosnippet (excluded from AI Overviews)', 'aireadiness', (p) => (p.directives || []).some((d) => d === 'nosnippet')),
+  F('ai-no-sd', 'AI Readiness', 'Indexable Without Structured Data', 'aireadiness', (p) => Array.isArray(p.aiBlockedBots) && isHtml200(p) && p.indexability === 'Indexable' && !(p.structuredData || []).length),
+  F('ai-thin', 'AI Readiness', 'Thin Content For AI Answers (<300 words)', 'aireadiness', (p) => Array.isArray(p.aiBlockedBots) && isHtml200(p) && p.indexability === 'Indexable' && (p.wordCount || 0) < 300),
+  // ---- AI prompts (Configuration > API Access > AI) ----
+  F('aip-all', 'AI', 'All', 'ai', (p) => HTML(p) && !!p.ai),
+  F('aip-has', 'AI', 'With AI Results', 'ai', (p) => Object.values(p.ai || {}).some((v) => String(v || '').trim() && !String(v).startsWith('ERROR:'))),
+  F('aip-errors', 'AI', 'AI Errors', 'ai', (p) => Object.values(p.ai || {}).some((v) => String(v || '').startsWith('ERROR:'))),
   // ---- Spelling & Grammar ----
   F('sg-all', 'Spelling & Grammar', 'All', 'spelling', (p) => HTML(p) && !p.external),
   F('sg-spelling', 'Spelling & Grammar', 'Spelling Errors', 'spelling', (p) => (p.spellingErrors || 0) > 0),
@@ -482,6 +535,26 @@ const ISSUES = [
   I('iss-a11y-empty-heading', 'Accessibility: Empty Headings', 'Warning', 'Low', 'a11y-empty-heading', 'Heading elements with no text content, which confuse screen-reader heading navigation.'),
   I('iss-a11y-frame-title', 'Accessibility: Iframes Without Title', 'Warning', 'Low', 'a11y-frame-title', 'Iframes with no title attribute describing their content.'),
   I('iss-a11y-viewport', 'Accessibility: Zooming Disabled', 'Warning', 'Medium', 'a11y-meta-viewport', 'Pages whose viewport meta tag stops users from zooming (user-scalable=no or a low maximum-scale).'),
+  I('iss-img-title', 'Images: Missing Image Title', 'Opportunity', 'Low', 'img-missing-title', 'Images without a title attribute. Titles are optional but can add context in some browsers and image search.'),
+  I('iss-img-nextgen', 'Images: Not Next-Gen Format', 'Opportunity', 'Medium', 'img-not-nextgen', 'Images served as JPG, PNG or GIF. Modern formats such as WebP and AVIF are usually 25-50% smaller at the same quality.'),
+  I('iss-hl-self-only', 'Hreflang: Self Reference Only', 'Warning', 'Low', 'hl-self-only', 'Pages whose hreflang annotations only reference the page itself, so they do not point search engines at any alternate version.'),
+  I('iss-hl-lang-mismatch', 'Hreflang: Mismatch With HTML Lang Attribute', 'Warning', 'Low', 'hl-lang-mismatch', 'Pages whose self-referencing hreflang language differs from the language declared in the <html lang> attribute.'),
+  I('iss-empty-anchor', 'Links: Pages With Empty Anchor Tags', 'Warning', 'Low', 'links-empty-anchor', 'Pages containing <a> links with no text, image, aria-label or title, so neither users nor search engines know where they lead.'),
+  I('iss-broken-bookmarks', 'URL: Broken Bookmarks', 'Warning', 'Low', 'url-broken-bookmarks', 'Internal links to a #fragment that does not exist as an id or name on the target page, so the link lands at the top of the page instead.'),
+  I('iss-og-missing', 'Social: Open Graph Tags Missing', 'Opportunity', 'Low', 'soc-og-missing', 'Pages without Open Graph tags. Social networks and messaging apps then guess the title, description and image when the page is shared.'),
+  I('iss-og-incomplete', 'Social: Open Graph Incomplete', 'Warning', 'Low', 'soc-og-incomplete', 'Pages with some Open Graph tags but missing at least one of og:title, og:description, og:image or og:url.'),
+  I('iss-og-image-non200', 'Social: og:image Not 200', 'Issue', 'Medium', 'soc-og-image-non200', 'The og:image URL does not return a 200 status, so shares show no image.'),
+  I('iss-og-image-small', 'Social: og:image Too Small', 'Opportunity', 'Low', 'soc-og-image-small', 'og:image is smaller than the recommended 1200x630 pixels, so large share cards may be blurry or fall back to small previews.'),
+  I('iss-tw-incomplete', 'Social: X Card Incomplete', 'Warning', 'Low', 'soc-tw-incomplete', 'Pages declaring an X (Twitter) card without a title or image (directly or via Open Graph fallbacks).'),
+  I('iss-viewport-missing', 'Mobile: Viewport Not Set', 'Issue', 'High', 'mob-viewport-missing', 'HTML pages without a viewport meta tag. Mobile browsers render them at desktop width, which hurts mobile usability.'),
+  I('iss-viewport-width', 'Mobile: Viewport Not Device Width', 'Warning', 'Medium', 'mob-viewport-not-responsive', 'The viewport meta tag does not use width=device-width, so the page may not scale correctly on phones.'),
+  I('iss-val-head', 'Validation: Invalid HTML Elements In <head>', 'Issue', 'High', 'val-invalid-head', 'Body elements (such as <img>, <div> or <iframe>) appear inside <head>. Browsers and Google close the <head> early when they meet them, so tags that follow (canonical, hreflang, meta robots) can be ignored.'),
+  I('iss-val-multi-head', 'Validation: Multiple <head>', 'Warning', 'Medium', 'val-multiple-head', 'Pages with more than one <head> element.'),
+  I('iss-val-multi-body', 'Validation: Multiple <body>', 'Warning', 'Medium', 'val-multiple-body', 'Pages with more than one <body> element.'),
+  I('iss-val-missing-head', 'Validation: <head> Missing', 'Warning', 'Medium', 'val-missing-head', 'Pages with no <head> element in the source.'),
+  I('iss-ai-blocked-search', 'AI Readiness: Blocked For AI Search', 'Warning', 'High', 'ai-blocked-search', 'robots.txt blocks AI search crawlers (OAI-SearchBot, Claude-SearchBot or PerplexityBot) from these pages, so they cannot be cited in ChatGPT, Claude or Perplexity answers.'),
+  I('iss-ai-blocked-some', 'AI Readiness: Blocked For Some AI Crawlers', 'Opportunity', 'Low', 'ai-blocked-some', 'robots.txt blocks at least one AI crawler from these pages. This is often intentional for training bots; check it matches your AI policy.'),
+  I('iss-ai-no-sd', 'AI Readiness: Indexable Without Structured Data', 'Opportunity', 'Low', 'ai-no-sd', 'Indexable pages without any structured data. Schema markup helps search engines and AI systems understand entities, products, articles and FAQs.'),
   I('iss-a11y-tabindex', 'Accessibility: Positive Tabindex', 'Warning', 'Low', 'a11y-tabindex', 'Elements with a tabindex above 0, which overrides the natural keyboard focus order.'),
 ];
 
@@ -571,6 +644,26 @@ const HOW_TO_FIX = {
   'iss-a11y-frame-title': 'Add a title attribute to each iframe describing its content.',
   'iss-a11y-viewport': 'Remove user-scalable=no and any maximum-scale below 2 from the viewport meta tag.',
   'iss-a11y-tabindex': 'Use tabindex="0" or -1 instead of positive values, and fix the focus order in the HTML source.',
+  'iss-img-title': 'Optionally add a short title attribute to important images. Prioritise alt text first; titles are a minor enhancement.',
+  'iss-img-nextgen': 'Convert images to WebP or AVIF (most CMS and CDNs can do this automatically) and serve them with <picture> or content negotiation.',
+  'iss-hl-self-only': 'Add hreflang annotations for every language or region version of the page (plus x-default), or remove hreflang if there are no alternates.',
+  'iss-hl-lang-mismatch': 'Make the <html lang> attribute and the self-referencing hreflang use the same language code.',
+  'iss-empty-anchor': 'Add descriptive anchor text, an image with alt text or an aria-label to each empty link, or remove links that have no purpose.',
+  'iss-broken-bookmarks': 'Add the missing id to the target section, or update the link to the correct #fragment.',
+  'iss-og-missing': 'Add og:title, og:description, og:image and og:url (most SEO plugins can output them from the page title and description).',
+  'iss-og-incomplete': 'Add the missing Open Graph properties so every share shows a title, description and image.',
+  'iss-og-image-non200': 'Point og:image at a live, publicly accessible image URL that returns 200.',
+  'iss-og-image-small': 'Use an og:image of at least 1200x630 pixels (1.91:1 ratio) and declare og:image:width and og:image:height.',
+  'iss-tw-incomplete': 'Add twitter:title and twitter:image, or make sure the Open Graph equivalents exist so X can fall back to them.',
+  'iss-viewport-missing': 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> to the <head> of every page.',
+  'iss-viewport-width': 'Set width=device-width in the viewport meta tag and make the layout responsive.',
+  'iss-val-head': 'Move body elements out of <head> (often injected by tag managers or plugins) and keep only meta, link, title, script, style, base and noscript there. Place critical tags (canonical, hreflang, robots) as early in the <head> as possible.',
+  'iss-val-multi-head': 'Remove the duplicate <head> element so the document has exactly one.',
+  'iss-val-multi-body': 'Remove the duplicate <body> element so the document has exactly one.',
+  'iss-val-missing-head': 'Add an explicit <head> containing the title, meta and link elements.',
+  'iss-ai-blocked-search': 'If you want to appear in AI answers, allow OAI-SearchBot, Claude-SearchBot and PerplexityBot in robots.txt (you can still block training bots such as GPTBot and ClaudeBot separately).',
+  'iss-ai-blocked-some': 'Review the AI Readiness tab. Decide per bot whether to allow search/answer crawlers and training crawlers, and write explicit User-agent groups for each.',
+  'iss-ai-no-sd': 'Add relevant schema.org JSON-LD (Organization, Article, Product, FAQPage, BreadcrumbList and so on) and validate it.',
 };
 
 for (const iss of ISSUES) iss.howToFix = HOW_TO_FIX[iss.id] || '';
@@ -579,9 +672,12 @@ for (const iss of ISSUES) iss.howToFix = HOW_TO_FIX[iss.id] || '';
  * e.g. Page Titles: Multiple = 7 of 11 HTML pages = 63.64%). */
 const SECTION_ALL = new Map();
 for (const f of FILTERS) if (!SECTION_ALL.has(f.section)) SECTION_ALL.set(f.section, f.id);
-function summariseIssues(pages) {
+function summariseIssues(pages, overrides = {}) {
   const out = [];
-  for (const iss of ISSUES) {
+  for (const base0 of ISSUES) {
+    const ov = overrides[base0.id] || {};
+    if (ov.disabled) continue;
+    const iss = { ...base0, type: ov.type || base0.type, priority: ov.priority || base0.priority };
     let count; let base;
     if (iss.id === 'iss-orphan') { count = pages.filter((p) => p.isOrphan).length; base = pages.filter((p) => !p.external && HTML(p)).length; }
     else {
@@ -597,4 +693,15 @@ function summariseIssues(pages) {
   return out.sort((a, b) => (order[a.priority] - order[b.priority]) || (b.count - a.count));
 }
 
-module.exports = { HOW_TO_FIX, FILTERS, FILTER_META, SECTIONS, ISSUES, buildFilterContext, applyFilters, summariseIssues, categoryOf, countMap, sdWarningsFor, NONDESCRIPTIVE };
+/* SEO Health Score 0-100 (beyond SF): each issue costs weight x spread,
+ * weight = type (Issue 3, Warning 2, Opportunity 1) x priority (3/2/1). */
+function healthScore(issues) {
+  const tw = { Issue: 3, Warning: 2, Opportunity: 1 }; const pw = { High: 3, Medium: 2, Low: 1 };
+  let penalty = 0;
+  for (const i of issues || []) penalty += (tw[i.type] || 1) * (pw[i.priority] || 1) * (0.3 + 0.7 * Math.min(1, (i.pct || 0) / 100));
+  const score = Math.round(100 * Math.exp(-penalty / 70));
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 40 ? 'D' : 'F';
+  return { score, grade, penalty: Math.round(penalty * 10) / 10 };
+}
+
+module.exports = { healthScore, HOW_TO_FIX, FILTERS, FILTER_META, SECTIONS, ISSUES, buildFilterContext, applyFilters, summariseIssues, categoryOf, countMap, sdWarningsFor, NONDESCRIPTIVE };
